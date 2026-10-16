@@ -17,7 +17,9 @@ A DJ-style track analysis and BPM-based mixing application built with Electron, 
 ## Features
 
 - **Import & Analyze**: Load multiple audio files (MP3, WAV, FLAC, OGG, AAC, M4A, AIFF)
-- **BPM Detection**: Automatic tempo detection with confidence scoring
+- **Beat Grid Analysis**: Tempo to a thousandth of a BPM, downbeats, and drifting-tempo tracking (runs in a Web Worker)
+- **Phrase Structure**: Intro / build / drop / breakdown / outro on the 8-bar grid, shown on the waveform
+- **Loudness**: Integrated LUFS and true peak per track (ITU-R BS.1770)
 - **BPM Normalization**: Handles double-time/half-time detection errors
 - **Manual BPM Override**: Correct detected BPM when needed
 - **Track Library**: Sort and filter tracks by BPM, name, or duration
@@ -87,7 +89,6 @@ npm run dev
 | **React**                   | UI framework                                  |
 | **TypeScript**              | Type safety                                   |
 | **Vite**                    | Fast development bundler                      |
-| **web-audio-beat-detector** | BPM detection using Web Audio API             |
 | **SoundTouchJS**            | Time-stretching with pitch preservation       |
 | **uuid**                    | Unique track identifiers                      |
 
@@ -96,8 +97,8 @@ npm run dev
 ```
 src/
 ├── audio/              # Audio processing modules
+│   ├── analysis/       # Beat grid, downbeats, phrases, loudness (pure; worker + Node CLI)
 │   ├── engine/         # Mix graph, deck player, audio-clock transport (shared by app and offline tests)
-│   ├── bpmAnalyzer.ts  # BPM detection (swappable)
 │   ├── decoder.ts      # Audio file decoding
 │   ├── fileImporter.ts # File import & metadata
 │   ├── playbackEngine.ts # Deck playback control
@@ -117,10 +118,11 @@ src/
 
 ## Tradeoffs
 
-### BPM Detection
+### Track Analysis
 
-- Uses `web-audio-beat-detector` which works well for electronic music but may struggle with complex rhythms
-- Includes fallback algorithm for when primary detection fails
+- Tuned for 4/4 music with a kick on the beat; tracks without a steady kick get a low confidence
+- The grid locks to the kick's attack; tempo drift is followed with measured beat positions
+- Downbeats come from chord/energy changes and claps on 2 and 4, so very minimal loops can be ambiguous
 - BPM is normalized to 85-175 range to handle double/half-time errors
 - Users can manually override detected BPM
 
@@ -144,7 +146,7 @@ src/
 
 ## Known Limitations
 
-1. **No Beat Grid**: Tracks are not beat-gridded; sync is BPM-based only
+1. **Drifting Tempo Sync**: Drifting-tempo tracks are analysed, but deck sync still assumes a constant tempo
 2. **No Key Detection**: Musical key analysis not implemented
 3. **No Effects**: No EQ, filters, or audio effects
 4. **Crossfader Curve**: Equal-power only, no curve options
@@ -183,6 +185,9 @@ npm run typecheck
 
 # Unit + offline-render tests (Vitest, Web Audio via node-web-audio-api)
 npm test
+
+# Analyse audio files or folders and print grid, downbeat, loudness and phrases
+npm run analyze -- ~/Music/some-folder
 
 # Development with hot reload
 npm run dev

@@ -1,12 +1,19 @@
 import type { Track, CachedAnalysis, TrackAnalysis } from '@/types';
+import { ANALYZER_VERSION } from './analysis/types';
 import { createFileFingerprint, fingerprintToKey } from './fileImporter';
+
+/** True when the analysis came from the current analyzer; older results are recomputed. */
+export function isCurrentAnalysis(analysis: { analyzerVersion?: number } | null | undefined): boolean {
+  return analysis?.analyzerVersion === ANALYZER_VERSION;
+}
 
 export async function getCachedAnalysis(track: Track): Promise<CachedAnalysis | null> {
   const fingerprint = createFileFingerprint(track);
   const key = fingerprintToKey(fingerprint);
 
   try {
-    return await window.electronAPI.cacheRead(key);
+    const cached = await window.electronAPI.cacheRead(key);
+    return isCurrentAnalysis(cached) ? cached : null;
   } catch (error) {
     console.error('Failed to read from cache:', error);
     return null;
@@ -17,13 +24,7 @@ export async function setCachedAnalysis(track: Track, analysis: TrackAnalysis): 
   const fingerprint = createFileFingerprint(track);
   const key = fingerprintToKey(fingerprint);
 
-  const cached: CachedAnalysis = {
-    bpm: analysis.bpm,
-    bpmConfidence: analysis.bpmConfidence,
-    firstBeatTime: analysis.firstBeatTime,
-    analyzedAt: analysis.analyzedAt,
-    duration: track.duration,
-  };
+  const cached: CachedAnalysis = { ...analysis, duration: track.duration };
 
   try {
     return await window.electronAPI.cacheWrite(key, cached);
@@ -43,11 +44,5 @@ export async function loadAllCachedAnalysis(): Promise<Record<string, CachedAnal
 }
 
 export function createAnalysisFromCache(cached: CachedAnalysis, cacheKey: string): TrackAnalysis {
-  return {
-    bpm: cached.bpm,
-    bpmConfidence: cached.bpmConfidence,
-    firstBeatTime: cached.firstBeatTime ?? 0,
-    analyzedAt: cached.analyzedAt,
-    cacheKey,
-  };
+  return { ...cached, cacheKey };
 }

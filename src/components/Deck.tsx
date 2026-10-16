@@ -123,6 +123,7 @@ export function Deck({
               duration={playback.duration}
               bpm={track.analysis?.manualBpm || track.analysis?.bpm}
               firstBeatTime={track.analysis?.firstBeatTime}
+              phrases={track.analysis?.phrases}
               onSeek={onSeek}
             />
           ) : (

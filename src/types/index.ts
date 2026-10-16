@@ -1,3 +1,7 @@
+import type { AudioAnalysis } from '@/audio/analysis/types';
+
+export type { AudioAnalysis, Phrase, PhraseLabel } from '@/audio/analysis/types';
+
 export interface SpectralWaveform {
   low: number[];
   mid: number[];
@@ -21,11 +25,8 @@ export interface Track {
   album?: string;
 }
 
-export interface TrackAnalysis {
-  bpm: number;
-  bpmConfidence: number;
+export interface TrackAnalysis extends AudioAnalysis {
   manualBpm?: number;
-  firstBeatTime: number; // Time in seconds of first detected beat
   analyzedAt: string;
   cacheKey: string;
 }
@@ -56,20 +57,7 @@ export interface MixState {
   masterVolume: number;
 }
 
-export interface BpmAnalyzerResult {
-  bpm: number;
-  confidence: number;
-  firstBeatTime: number;
-}
-
-export interface BpmAnalyzer {
-  analyze(audioBuffer: AudioBuffer): Promise<BpmAnalyzerResult>;
-}
-
-export interface CachedAnalysis {
-  bpm: number;
-  bpmConfidence: number;
-  firstBeatTime: number;
+export interface CachedAnalysis extends AudioAnalysis {
   analyzedAt: string;
   duration: number;
 }

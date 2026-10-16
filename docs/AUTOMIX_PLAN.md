@@ -186,3 +186,27 @@ Carried forward:
 - Unit tests on synthetic signals (click tracks, chords, pink noise) for tempo, grid, key, LUFS.
 - Benchmarks on GiantSteps Tempo / Key.
 - Blind A/B listening against human DJ transitions on the same track pairs.
+
+### Phase 1 — done (2026-10-16)
+
+- `src/audio/analysis/` (pure, runs in a Web Worker and in Node): STFT features, tempo
+  (autocorrelation + prior), beat grid (fold search, then kick-envelope correlation over 4-bar
+  windows → regression), drifting-tempo tracking (template-free coarse pass, unwrap against drift,
+  segments joined across breakdowns, refined twice), downbeats (2-beat chord/energy change +
+  backbeat claps), structure (per-bar kick / bassline / loudness flags → 8-bar majority → labels),
+  BS.1770 loudness + true peak. `ANALYZER_VERSION = 2` invalidates old cached results.
+- App: one-at-a-time analysis queue (no duplicate runs or memory spikes), worker with main-thread
+  fallback, phrase markers + phrase strip on the waveform, grid drawn before the first downbeat.
+- `npm run analyze -- <folder>` CLI. On the user's 42-track playlist: ~2 s per track, DAW-made
+  tracks land on round BPMs (116.000, 120.000, 128.000, 132.000), 5 tracks flagged drifting
+  (Sfire 6, Wudang, Untitled 279 - Mixed, Fourmis, Us Ephemeral).
+- Tests on synthetic house tracks with exact ground truth: 123.45 BPM to 3 decimals, zero drift
+  over 4.4 min, kick attack within 2 ms, downbeats right with and without claps, phrase
+  boundaries exact; drifting 120 → 124 BPM tracked within 5 ms across a 24-bar breakdown;
+  EBU 3341 −23 LUFS reference; inter-sample true peak.
+- Grid bias: beats sit on the 50% energy point of the kick attack (+1.2 ms on a 1 ms attack),
+  the same definition for steady and drifting tracks so they align with each other.
+
+Open (needs the user's ears): downbeat choice on real tracks (no ground truth; confidence is low
+on minimal tracks), octave choice for 140–170 BPM readings (may be 70–85 BPM half-time), phrase
+labels on real arrangements. Deck sync for drifting tracks uses anchors in Phase 4.

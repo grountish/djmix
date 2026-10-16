@@ -1,5 +1,5 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
-import type { SpectralWaveform } from '@/types';
+import type { Phrase, PhraseLabel, SpectralWaveform } from '@/types';
 
 interface WaveformProps {
   data: number[];
@@ -8,7 +8,20 @@ interface WaveformProps {
   duration: number;
   bpm?: number;
   firstBeatTime?: number;
+  phrases?: Phrase[];
   onSeek: (time: number) => void;
+}
+
+const PHRASE_COLORS: Record<PhraseLabel, string> = {
+  intro: '#5ec8c8',
+  build: '#e8c547',
+  drop: '#ff7a3d',
+  breakdown: '#a78bfa',
+  outro: '#8a8f98',
+};
+
+function phraseStartTime(phrase: Phrase, firstBeatTime: number, bpm: number): number {
+  return firstBeatTime + (phrase.startBar * 4 * 60) / bpm;
 }
 
 // Zoom levels in bars (4 beats per bar)
@@ -22,6 +35,7 @@ export function Waveform({
   duration,
   bpm,
   firstBeatTime = 0,
+  phrases,
   onSeek,
 }: WaveformProps) {
   const [zoomIndex, setZoomIndex] = useState(DEFAULT_ZOOM_INDEX);
@@ -142,18 +156,14 @@ export function Waveform({
       // Draw beat grid on top (subtle)
       if (bpm && bpm > 0) {
         const beatDuration = 60 / bpm;
-        let beatTime = firstBeatTime;
-        let beatCount = 0;
-
-        while (beatTime + beatDuration < windowStart) {
-          beatTime += beatDuration;
-          beatCount++;
-        }
+        // Beat 0 is the first downbeat; the grid extends before it too.
+        let beatCount = Math.ceil((windowStart - firstBeatTime) / beatDuration);
+        let beatTime = firstBeatTime + beatCount * beatDuration;
 
         ctx.globalCompositeOperation = 'lighter';
         while (beatTime <= windowEnd) {
           const x = ((beatTime - windowStart) / windowDuration) * width;
-          const isDownbeat = beatCount % 4 === 0;
+          const isDownbeat = ((beatCount % 4) + 4) % 4 === 0;
 
           ctx.strokeStyle = isDownbeat ? 'rgba(255, 255, 255, 0.25)' : 'rgba(255, 255, 255, 0.08)';
           ctx.lineWidth = isDownbeat ? 1 : 0.5;
@@ -166,6 +176,23 @@ export function Waveform({
           beatCount++;
         }
         ctx.globalCompositeOperation = 'source-over';
+
+        // Phrase starts, labelled
+        ctx.font = '9px sans-serif';
+        ctx.textBaseline = 'top';
+        for (const phrase of phrases ?? []) {
+          const time = phraseStartTime(phrase, firstBeatTime, bpm);
+          if (time < windowStart || time > windowEnd) continue;
+          const x = Math.floor(((time - windowStart) / windowDuration) * width) + 0.5;
+          ctx.strokeStyle = PHRASE_COLORS[phrase.label];
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.moveTo(x, 0);
+          ctx.lineTo(x, height);
+          ctx.stroke();
+          ctx.fillStyle = PHRASE_COLORS[phrase.label];
+          ctx.fillText(phrase.label.toUpperCase(), x + 3, 2);
+        }
       }
 
       // Center line (subtle)
@@ -217,6 +244,7 @@ export function Waveform({
     windowDuration,
     bpm,
     firstBeatTime,
+    phrases,
   ]);
 
   // Cache for overview waveform
@@ -286,8 +314,18 @@ export function Waveform({
       ctx.fillRect(px, centerY - lineHeight, 1, lineHeight * 2);
     }
 
+    // Phrase map along the bottom edge
+    if (bpm && bpm > 0 && duration > 0) {
+      (phrases ?? []).forEach((phrase, i, all) => {
+        const start = phraseStartTime(phrase, firstBeatTime, bpm);
+        const end = i + 1 < all.length ? phraseStartTime(all[i + 1], firstBeatTime, bpm) : duration;
+        ctx.fillStyle = PHRASE_COLORS[phrase.label];
+        ctx.fillRect((start / duration) * width, height - 3, ((end - start) / duration) * width, 3);
+      });
+    }
+
     cachedOverviewRef.current = offscreen;
-  }, [data, spectralData]);
+  }, [data, spectralData, phrases, bpm, firstBeatTime, duration]);
 
   // Draw overview with viewport and playhead (fast - just compositing)
   useEffect(() => {

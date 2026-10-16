@@ -1,4 +1,4 @@
-export * from './bpmAnalyzer';
+export * from './analysis/analysisClient';
 export * from './decoder';
 export * from './fileImporter';
 export * from './playbackEngine';

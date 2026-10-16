@@ -8,11 +8,12 @@ import {
   createTrackFromBrowserFile,
   createFileFingerprint,
   fingerprintToKey,
-  getBpmAnalyzer,
+  analyzeAudioBuffer,
   decodeAudioFile,
   getCachedAnalysis,
   setCachedAnalysis,
   createAnalysisFromCache,
+  isCurrentAnalysis,
   isElectronEnvironment,
   generateWaveformData,
   generateSpectralWaveform,
@@ -44,16 +45,13 @@ export function App() {
 
       try {
         const audioBuffer = track._audioBuffer || (await decodeAudioFile(track.filePath));
-        const analyzer = getBpmAnalyzer();
-        const result = await analyzer.analyze(audioBuffer);
+        const result = await analyzeAudioBuffer(audioBuffer);
 
         const fingerprint = createFileFingerprint(track);
         const cacheKey = fingerprintToKey(fingerprint);
 
         const analysis: TrackAnalysis = {
-          bpm: result.bpm,
-          bpmConfidence: result.confidence,
-          firstBeatTime: result.firstBeatTime,
+          ...result,
           analyzedAt: new Date().toISOString(),
           cacheKey,
         };
@@ -89,11 +87,7 @@ export function App() {
 
         for (const filePath of newFilePaths) {
           try {
-            const track = await createTrackFromFile(filePath);
-            actions.addTracks([track]);
-
-            const analyzedTrack = await analyzeTrack(track);
-            actions.updateTrack(analyzedTrack);
+            actions.addTracks([await createTrackFromFile(filePath)]);
           } catch (error) {
             console.error(`Failed to import ${filePath}:`, error);
           }
@@ -107,11 +101,7 @@ export function App() {
 
         for (const file of newFiles) {
           try {
-            const track = await createTrackFromBrowserFile(file);
-            actions.addTracks([track]);
-
-            const analyzedTrack = await analyzeTrack(track);
-            actions.updateTrack(analyzedTrack);
+            actions.addTracks([await createTrackFromBrowserFile(file)]);
           } catch (error) {
             console.error(`Failed to import ${file.name}:`, error);
           }
@@ -120,14 +110,19 @@ export function App() {
     } catch (error) {
       console.error('Import failed:', error);
     }
-  }, [state.tracks, actions, analyzeTrack]);
+  }, [state.tracks, actions]);
+
+  // Analyse pending tracks one at a time: each analysis holds a decoded track in memory.
+  const analysisQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const queuedTrackIdsRef = useRef(new Set<string>());
 
   useEffect(() => {
-    const pendingTracks = state.tracks.filter((t) => t.analysisStatus === 'pending');
-
-    for (const track of pendingTracks) {
-      analyzeTrack(track).then((analyzedTrack) => {
-        actions.updateTrack(analyzedTrack);
+    for (const track of state.tracks) {
+      if (track.analysisStatus !== 'pending' || queuedTrackIdsRef.current.has(track.id)) continue;
+      queuedTrackIdsRef.current.add(track.id);
+      analysisQueueRef.current = analysisQueueRef.current.then(async () => {
+        actions.updateTrack(await analyzeTrack(track));
+        queuedTrackIdsRef.current.delete(track.id);
       });
     }
   }, [state.tracks, analyzeTrack, actions]);
@@ -170,11 +165,13 @@ export function App() {
               const waveformData = generateWaveformData(audioBuffer);
               const spectralWaveform = generateSpectralWaveform(audioBuffer);
 
+              const current = isCurrentAnalysis(track.analysis);
               const hydratedTrack: Track = {
                 ...track,
                 waveformData,
                 spectralWaveform,
-                analysisStatus: track.analysis ? 'complete' : 'pending',
+                analysis: current ? track.analysis : null,
+                analysisStatus: current ? 'complete' : 'pending',
               };
               loadedTracks.push(hydratedTrack);
             } catch (error) {
@@ -190,7 +187,11 @@ export function App() {
         } else {
           // Browser mode: tracks already have waveform data stored
           // (or they need to be re-imported)
-          const validTracks = savedTracks.filter((t) => t.waveformData);
+          const validTracks = savedTracks
+            .filter((t) => t.waveformData)
+            .map((t): Track =>
+              isCurrentAnalysis(t.analysis) ? t : { ...t, analysis: null, analysisStatus: 'pending' },
+            );
           if (validTracks.length > 0) {
             tracksCountAfterLoadRef.current = validTracks.length;
             actions.addTracks(validTracks);
