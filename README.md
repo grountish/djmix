@@ -35,7 +35,10 @@ A DJ-style track analysis and BPM-based mixing application built with Electron, 
 - **DJ Filter**: One knob, low-pass to the left, high-pass to the right
 - **Auto Gain**: Each track is trimmed towards -11 LUFS from its measured loudness
 - **Master Limiter**: Lookahead brickwall limiter, -1.5 dBFS ceiling
-- **Crossfader**: Equal-power blend between Deck A and Deck B
+- **Crossfader**: Both decks at full level in the centre, quarter-cosine fade towards each side
+- **Planned Transitions (Mix)**: Phrase-aligned EQ blends (32/16/8 bars) with a bass swap on a downbeat, tempos meeting halfway, optional ±1 semitone key shift, beat-locked on the audio clock
+- **Auto DJ**: With Auto on, the queue (or the best library match) plays as a continuous set
+- **Analysis Corrections**: Tempo ×2/÷2, grid nudge, downbeat shift and key override per track
 - **Volume Controls**: Per-deck volume and master volume
 - **Analysis Caching**: BPM results are cached locally to avoid recomputation
 
@@ -196,6 +199,9 @@ npm test
 
 # Analyse audio files or folders and print grid, downbeat, loudness and phrases
 npm run analyze -- ~/Music/some-folder
+
+# Render a transition between two files offline, write it to a WAV and print how tight it was
+npm run mixlab -- outgoing.mp3 incoming.mp3 --out mix.wav
 
 # Development with hot reload
 npm run dev

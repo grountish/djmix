@@ -244,3 +244,36 @@ labels on real arrangements. Deck sync for drifting tracks uses anchors in Phase
 - Tag BPM vs analysis on the playlist: 32 equal, 4 octave apart, 6 at 3:2 or 4:3 (iguana, Calor,
   Canto, Recorddeals, Rise N Fall, Wudang): non-four-on-the-floor rhythms, to check by ear.
 - Test files now run sequentially: the native Web Audio addon is flaky with parallel offline renders.
+
+### Phase 4 — core done (2026-10-16)
+
+- `mix/planner.ts` plans in musical time: native-first tempo meeting point with ramps in solo
+  sections, ±1 semitone key shift for trusted keys, mix points on both 8-bar phrase grids (overlap
+  ends where the outgoing track runs out; incoming drop at the overlap end, or the bass swap on the
+  drop when the intro is shorter), 32/16/8-bar EQ blend templates around the bass swap, cuts when
+  tempos can't meet.
+- `mix/runner.ts` derives everything from the outgoing beat timeline: the incoming deck gets one
+  rate per beat so its beats land on the outgoing beats (phase lock by construction, drifting
+  tracks included); EQ/fader/filter curves on the audio clock; one stretcher change in flight.
+- Live: the Mix button plans and runs a transition; plan summary in the status bar.
+- `npm run mixlab -- a.mp3 b.mp3 --out mix.wav` renders a real transition offline and reports
+  `summarizeTransition` metrics (`mix/metrics.ts`, built by a parallel agent).
+- Beat grids: windows that sit > 4 ms off the straight grid in a row are local shifts (edits) and
+  switch the track to measured anchors; 24/42 of the user's tracks have them.
+- Real pairs: Leash Called Love → My Boo 32-bar blend with kicks at −1.5 ms median, p95 4 ms, no
+  bass collisions. Remaining: loudness through the blend varies 1.6–2.9 LU (target 1) — needs
+  energy-aware EQ balancing from per-bar band energies; some pairs measure too few clear kicks.
+
+### Phase 5 — done (2026-10-16)
+
+- `mix/sequencer.ts` (parallel agent): transition score (tempo cost, set direction, harmonic, energy)
+  and deterministic beam-search ordering; `suggestNext`.
+- Auto DJ (`store/useAutoDj.ts`): with Auto on it starts the loaded deck, loads the next track
+  (queue head, else the best library match) onto the idle deck and arms one planned transition per
+  track. Queue panel with tempo direction and smart order. Crossfader grab cancels and turns Auto off.
+
+### Phase 6 — partly done
+
+- Per-track corrections (parallel agent): tempo ×2/÷2, grid nudge, downbeat ±1 beat, key override,
+  stored on the track and applied via `effectiveAnalysis(track)` everywhere (automix included).
+- Still open: live EQ knob animation during automix, transition timeline view.
