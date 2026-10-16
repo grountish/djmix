@@ -18,7 +18,17 @@ export interface MixPointInput {
   /** Bars the outgoing track needs before the overlap starts (tempo ramp, scheduling). */
   leadBars: number;
   maxOverlapBars: number;
+  /**
+   * 'end': mix where the outgoing track runs out (Auto). 'now': at the next 16/32-bar entry
+   * that can be reached (Mix now).
+   */
+  timing?: MixTiming;
 }
+
+export type MixTiming = 'now' | 'end';
+
+/** Mix-now entries sit on this lattice of the phrase grid (or on a section start). */
+const ENTRY_BARS = 16;
 
 export interface MixPoints {
   /** 0 means no overlap: a cut on the phrase line. */
@@ -65,12 +75,21 @@ export function chooseMixPoints(input: MixPointInput): MixPoints {
   const earliest = Math.ceil(outgoing.currentBar + input.leadBars);
   const longest = intro >= MIN_INTRO_FOR_LONG_BLEND ? input.maxOverlapBars : Math.min(input.maxOverlapBars, SHORT_BLEND_BARS);
 
+  const entries = input.timing === 'now' ? entryBars(outgoing.phrases, outgoing.barCount, originOut) : [];
+
   for (const overlap of OVERLAP_CHOICES) {
     if (overlap > longest) continue;
 
-    let start = outgoing.barCount - overlap;
-    while (start >= earliest && !onGrid(start, originOut)) start--;
-    if (start < earliest) continue;
+    let start: number;
+    if (input.timing === 'now') {
+      const entry = entries.find((bar) => bar >= earliest && bar + overlap <= outgoing.barCount);
+      if (entry === undefined) continue;
+      start = entry;
+    } else {
+      start = outgoing.barCount - overlap;
+      while (start >= earliest && !onGrid(start, originOut)) start--;
+      if (start < earliest) continue;
+    }
 
     let incomingStart = Math.max(0, intro - overlap);
     while (incomingStart > 0 && !onGrid(incomingStart, originIn)) incomingStart--;
@@ -83,8 +102,12 @@ export function chooseMixPoints(input: MixPointInput): MixPoints {
     };
   }
 
-  // No blend: cut on the last phrase line that leaves the outgoing track's final phrase out,
-  // straight into the incoming track's main section so the energy carries on.
+  // No blend: cut straight into the incoming track's main section so the energy carries on —
+  // at the next entry for 'now', else on the last phrase line before the final phrase.
+  if (input.timing === 'now') {
+    const entry = entries.find((bar) => bar >= earliest && bar < outgoing.barCount);
+    if (entry !== undefined) return { overlapBars: 0, outgoingStartBar: entry, incomingStartBar: intro, bassSwapBar: 0 };
+  }
   let cut = outgoing.barCount - PHRASE_BARS;
   while (cut >= earliest && !onGrid(cut, originOut)) cut--;
   if (cut < earliest) {
@@ -103,4 +126,11 @@ function bassSwapBar(overlap: number, dropInOverlap: number): number {
   const margin = overlap / 4;
   if (dropInOverlap >= margin && dropInOverlap <= overlap - margin) return dropInOverlap;
   return overlap / 2;
+}
+
+/** Section starts and the 16-bar lattice of the phrase grid, ascending. */
+function entryBars(phrases: Phrase[], barCount: number, origin: number): number[] {
+  const bars = new Set(phrases.map((p) => p.startBar).filter((bar) => bar > 0));
+  for (let bar = origin; bar < barCount; bar += ENTRY_BARS) if (bar > 0) bars.add(bar);
+  return [...bars].sort((a, b) => a - b);
 }

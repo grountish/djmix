@@ -78,17 +78,37 @@ describe('transition runner', () => {
     expect(plan.outgoingStartBar).toBe(24);
     expect(plan.incomingStartBar).toBe(0);
 
+    const events: Record<string, number> = {};
+    const at = (name: string) => () => (events[name] = ctx.currentTime);
     const runner = new TransitionRunner(
       ctx,
       mix.graph,
       { id: 'A', player: mix.decks.A, clock: trackClock(outgoing.analysis) },
       { id: 'B', player: mix.decks.B, clock: trackClock(incoming.analysis) },
       plan,
+      { onIncomingStarted: at('started'), onOutgoingStopped: at('stopped'), onFinished: at('finished') },
     );
     runner.start();
+
+    // The controls can show the automation: before the overlap the incoming deck is held
+    // silent with its lows killed, the outgoing deck untouched.
+    const before = runner.laneValues(runner.incomingStart - 1);
+    expect(runner.incomingStarted(runner.incomingStart - 1)).toBe(false);
+    expect(before.incoming).toMatchObject({ fader: 0, low: -Infinity });
+    expect(before.outgoing).toMatchObject({ fader: 1, low: 0, filter: 0 });
+
     const out = await renderWithRunner(ctx, runner, [mix.decks.A, mix.decks.B]);
     expect(runner.finished).toBe(true);
     expect(mix.decks.A.isPlaying).toBe(false);
+    expect(events.started).toBeGreaterThanOrEqual(runner.incomingStart);
+    expect(events.started).toBeLessThan(runner.incomingStart + 0.1);
+    expect(events.stopped).toBeGreaterThanOrEqual(runner.overlapEnd);
+    expect(events.finished).toBeGreaterThanOrEqual(runner.finishTime);
+
+    // After the overlap the incoming deck is at unity and the outgoing one faded out.
+    const after = runner.laneValues(runner.overlapEnd + 1);
+    expect(after.incoming).toMatchObject({ fader: 1, low: 0, mid: 0, high: 0 });
+    expect(after.outgoing.fader).toBe(0);
 
     const slice = (channel: number, from: number, to: number) =>
       out.getChannelData(channel).slice(Math.round(from * SAMPLE_RATE), Math.round(to * SAMPLE_RATE));

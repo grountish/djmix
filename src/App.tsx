@@ -288,7 +288,7 @@ export function App() {
               onVolumeAChange={(volume) => actions.setDeckVolume('A', volume)}
               onVolumeBChange={(volume) => actions.setDeckVolume('B', volume)}
               onAutomixToggle={() => actions.setAutomixEnabled(!state.automix.enabled)}
-              onTriggerAutomix={actions.triggerAutomix}
+              onTriggerAutomix={() => actions.triggerAutomix('now')}
             />
 
             <Deck

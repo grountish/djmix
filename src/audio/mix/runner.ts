@@ -4,7 +4,7 @@ import type { DeckPlayer } from '../engine/deckPlayer';
 import { type DeckId, type MixGraph, setCrossfaderPosition, setParamSmooth } from '../engine/mixGraph';
 import { STRETCH_LEAD } from '../engine/stretch';
 import type { TransitionPlan } from './planner';
-import { eqDbToGain, interpolate, type Lane, type LaneTarget } from './templates';
+import { eqDbToGain, interpolate, type Lane, type LaneControl, type LaneTarget, laneValueAt } from './templates';
 
 export interface RunnerDeck {
   id: DeckId;
@@ -14,9 +14,13 @@ export interface RunnerDeck {
 
 interface Command {
   at: number;
-  kind: 'rate' | 'stop';
+  /** 'started' / 'stop' fire once the clock passes `at`; 'rate' goes out ahead of it. */
+  kind: 'rate' | 'stop' | 'started';
   rate?: number;
 }
+
+/** Where every automated control stands, per deck, in the lanes' own units. */
+export type LaneValues = Record<LaneTarget, Partial<Record<LaneControl, number>>>;
 
 /** Rate changes go out this far ahead: past the stretcher's lead, one pending per deck. */
 const SEND_AHEAD = STRETCH_LEAD + 0.15;
@@ -42,6 +46,7 @@ export class TransitionRunner {
   private readonly pendingUntil: Record<LaneTarget, number> = { outgoing: -Infinity, incoming: -Infinity };
   private readonly outgoingBeats = new Map<number, number>();
   private automated: AudioParam[] = [];
+  private startBeat = 0;
 
   constructor(
     private readonly ctx: BaseAudioContext,
@@ -49,7 +54,11 @@ export class TransitionRunner {
     private readonly outgoing: RunnerDeck,
     private readonly incoming: RunnerDeck,
     private readonly plan: TransitionPlan,
-    private readonly events: { onOutgoingStopped?: () => void; onFinished?: () => void } = {},
+    private readonly events: {
+      onIncomingStarted?: () => void;
+      onOutgoingStopped?: () => void;
+      onFinished?: () => void;
+    } = {},
   ) {}
 
   start(): void {
@@ -66,10 +75,25 @@ export class TransitionRunner {
     this.overlapEnd = this.outgoingBeats.get(endBeat)!;
 
     this.startIncoming(startBeat, endBeat);
+    this.queues.incoming.unshift({ at: this.incomingStart, kind: 'started' });
     this.queues.outgoing.push({ at: this.overlapEnd, kind: 'stop' });
+    this.startBeat = startBeat;
 
     setCrossfaderPosition(this.graph, 0);
     for (const lane of this.plan.lanes) this.scheduleLane(lane, startBeat);
+  }
+
+  /** Whether the incoming deck is audible yet. */
+  incomingStarted(now: number): boolean {
+    return now >= this.incomingStart;
+  }
+
+  /** Every lane's value at `now`, for showing the automation on the controls. */
+  laneValues(now: number): LaneValues {
+    const values: LaneValues = { outgoing: {}, incoming: {} };
+    const bar = this.barAt(now);
+    for (const lane of this.plan.lanes) values[lane.target][lane.control] = laneValueAt(lane, bar);
+    return values;
   }
 
   /** Clock time of an outgoing beat (beat 0 = its first downbeat), once started. */
@@ -83,7 +107,7 @@ export class TransitionRunner {
     const times = (Object.keys(this.queues) as LaneTarget[]).flatMap((deck) => {
       const head = this.queues[deck][0];
       if (!head) return [];
-      return [head.kind === 'stop' ? head.at : Math.max(head.at - SEND_AHEAD, this.pendingUntil[deck])];
+      return [head.kind === 'rate' ? Math.max(head.at - SEND_AHEAD, this.pendingUntil[deck]) : head.at];
     });
     return Math.min(...times, this.finishTime);
   }
@@ -94,9 +118,10 @@ export class TransitionRunner {
       const queue = this.queues[deck];
       while (queue.length > 0) {
         const command = queue[0];
-        if (command.kind === 'stop') {
+        if (command.kind === 'stop' || command.kind === 'started') {
           if (now < command.at) break;
-          this.stopOutgoing();
+          if (command.kind === 'stop') this.stopOutgoing();
+          else this.events.onIncomingStarted?.();
         } else {
           if (command.at - now > SEND_AHEAD || now < this.pendingUntil[deck]) break;
           this.deckFor(deck).player.scheduleRate(command.at, command.rate!);
@@ -203,6 +228,23 @@ export class TransitionRunner {
     setParamSmooth(deck.filter.lowpass.frequency, this.ctx.sampleRate / 2, this.ctx);
     setParamSmooth(deck.filter.highpass.frequency, 0, this.ctx);
     this.events.onOutgoingStopped?.();
+  }
+
+  /** Overlap-relative bar at clock time `time` (inverse of barTime). */
+  private barAt(time: number): number {
+    const beats = [...this.outgoingBeats.keys()];
+    let lo = 0;
+    let hi = beats.length - 1;
+    if (time <= this.outgoingBeats.get(beats[0])!) return (beats[0] - this.startBeat) / 4;
+    if (time >= this.outgoingBeats.get(beats[hi])!) return (beats[hi] - this.startBeat) / 4;
+    while (hi - lo > 1) {
+      const mid = (lo + hi) >> 1;
+      if (this.outgoingBeats.get(beats[mid])! <= time) lo = mid;
+      else hi = mid;
+    }
+    const a = this.outgoingBeats.get(beats[lo])!;
+    const b = this.outgoingBeats.get(beats[hi])!;
+    return (beats[lo] + (time - a) / (b - a) - this.startBeat) / 4;
   }
 
   /** Clock time of an overlap-relative bar, interpolated within the outgoing beat timeline. */

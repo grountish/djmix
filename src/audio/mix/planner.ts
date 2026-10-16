@@ -1,7 +1,7 @@
 import { toCamelot, type MusicalKey } from '../analysis/key';
 import type { AudioAnalysis, TrackKey } from '../analysis/types';
 import { bestKeyShift, harmonicScore, MIN_KEY_SHIFT_CONFIDENCE, transpose } from './harmonic';
-import { chooseMixPoints } from './mixPoints';
+import { chooseMixPoints, type MixTiming } from './mixPoints';
 import { DEFAULT_TEMPO_POLICY, planTempo, type TempoPlan, type TempoPolicy } from './tempoPlan';
 import { blendTemplate, cutTemplate, type Lane } from './templates';
 import { trackClock } from './trackClock';
@@ -39,6 +39,8 @@ export interface PlanInput {
     semitones: number;
   };
   incoming: { analysis: AudioAnalysis; bpm?: number };
+  /** 'end' (default): where the outgoing track runs out. 'now': the next 16/32-bar entry. */
+  timing?: MixTiming;
   policy?: Partial<PlanPolicy>;
 }
 
@@ -82,6 +84,7 @@ export function planTransition(input: PlanInput): TransitionPlan {
     incoming: { phrases: inc.phrases, barCount: inc.bars.lowDb.length },
     leadBars: tempo.outgoingRampBars + SCHEDULING_LEAD_BARS,
     maxOverlapBars: !tempo.canBlend ? 0 : keyClash ? 8 : policy.maxOverlapBars,
+    timing: input.timing,
   });
 
   const blend = tempo.canBlend && points.overlapBars > 0;

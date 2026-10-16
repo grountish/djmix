@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useReducer, useCallback } from 'react';
+import React, { createContext, useContext, useReducer, useCallback, useRef } from 'react';
 import type { AnalysisOverrides, Track, DeckState, EqBand, PlaybackMode, SortOption, FilterOptions } from '@/types';
 import { effectiveAnalysis } from '@/audio/analysis/overrides';
 import {
@@ -25,6 +25,9 @@ import {
 } from '@/audio/mixingEngine';
 import { cancelTransition, describePlan, startAutomixTransition } from '@/audio/automixController';
 import { orderSet, sequencerTrackFromAnalysis, type TempoDirection } from '@/audio/mix/sequencer';
+import type { MixTiming } from '@/audio/mix/mixPoints';
+import { eqDbToGain } from '@/audio/mix/templates';
+import { eqGainToKnob } from '@/audio/engine/curves';
 
 interface AppState {
   tracks: Track[];
@@ -315,7 +318,11 @@ interface AppContextValue {
     setReferenceTrack: (trackId: string | null) => void;
     syncToTarget: (deck: 'A' | 'B') => void;
     setAutomixEnabled: (enabled: boolean) => void;
-    triggerAutomix: () => void;
+    setAutomixStatus: (status: string | null) => void;
+    /** 'now': at the next 16/32-bar entry (Mix now). 'end': where the playing track runs out (Auto). */
+    triggerAutomix: (timing?: MixTiming) => void;
+    /** Hands control back to the user (see releaseAutomix). */
+    releaseAutomix: (reason: string) => void;
     addToQueue: (trackId: string) => void;
     removeFromQueue: (trackId: string) => void;
     moveInQueue: (trackId: string, offset: number) => void;
@@ -328,8 +335,48 @@ interface AppContextValue {
 
 const AppContext = createContext<AppContextValue | null>(null);
 
+/** Smallest change worth re-rendering for while automix moves a control. */
+const LIVE_CONTROL_STEP = 0.01;
+const LIVE_RATE_STEP = 1e-4;
+
 export function AppProvider({ children }: { children: React.ReactNode }) {
   const [state, dispatch] = useReducer(reducer, initialState);
+  const stateRef = useRef(state);
+  stateRef.current = state;
+
+  /**
+   * Any manual control move takes over from automix: the running transition stops, every
+   * engine control goes back to what its knob shows, a deck that hadn't come in yet is
+   * stopped, and Auto turns off so it doesn't immediately start another one.
+   */
+  const releaseAutomix = useCallback((reason: string) => {
+    const cancelled = cancelTransition();
+    if (!cancelled) return;
+    const current = stateRef.current;
+    for (const id of ['A', 'B'] as const) {
+      const deck = id === 'A' ? current.deckA : current.deckB;
+      setChannelFader(id, deck.playback.volume);
+      for (const band of ['low', 'mid', 'high'] as const) setDeckEq(id, band, deck.eq[band]);
+      setDeckFilter(id, deck.filter);
+    }
+    if (!cancelled.incomingStarted) {
+      // Nothing of it was heard: stop it and give it back neutral.
+      const id = cancelled.incomingId;
+      forceStopDeck(id);
+      dispatch({ type: 'SET_DECK_PLAYING', deck: id, isPlaying: false });
+      setChannelFader(id, 1);
+      dispatch({ type: 'SET_DECK_VOLUME', deck: id, volume: 1 });
+      for (const band of ['low', 'mid', 'high'] as const) {
+        setDeckEq(id, band, 0);
+        dispatch({ type: 'SET_DECK_EQ', deck: id, band, value: 0 });
+      }
+      setDeckFilter(id, 0);
+      dispatch({ type: 'SET_DECK_FILTER', deck: id, value: 0 });
+    }
+    dispatch({ type: 'SET_AUTOMIX_TRANSITIONING', isTransitioning: false });
+    dispatch({ type: 'SET_AUTOMIX_ENABLED', enabled: false });
+    dispatch({ type: 'SET_AUTOMIX_STATUS', status: `Automix stopped: ${reason}` });
+  }, []);
 
   const actions: AppContextValue['actions'] = {
     addTracks: useCallback((tracks: Track[]) => {
@@ -358,6 +405,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
     loadToDeck: useCallback(
       async (deck: 'A' | 'B', track: Track & { _audioBuffer?: AudioBuffer }) => {
+        releaseAutomix(`deck ${deck} loaded`);
         if (isElectronEnvironment()) {
           await loadTrackToDeck(deck, track.filePath);
         } else if (track._audioBuffer) {
@@ -378,10 +426,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           dispatch({ type: 'SET_DECK_PLAYING', deck, isPlaying: false });
         });
       },
-      [],
+      [releaseAutomix],
     ),
 
     playPauseDeck: useCallback((deck: 'A' | 'B') => {
+      releaseAutomix(`deck ${deck} play/pause`);
       // Check ACTUAL engine state, not just React state
       if (isDeckEnginePlaying(deck)) {
         forceStopDeck(deck);
@@ -389,53 +438,53 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       } else if (playDeck(deck)) {
         dispatch({ type: 'SET_DECK_PLAYING', deck, isPlaying: true });
       }
-    }, []),
+    }, [releaseAutomix]),
 
     seekDeck: useCallback((deck: 'A' | 'B', time: number) => {
+      releaseAutomix(`deck ${deck} moved`);
       seekDeck(deck, time);
       dispatch({ type: 'SET_DECK_TIME', deck, currentTime: time });
-    }, []),
+    }, [releaseAutomix]),
 
     setDeckTargetBpm: useCallback((deck: 'A' | 'B', bpm: number | null) => {
       dispatch({ type: 'SET_DECK_TARGET_BPM', deck, targetBpm: bpm });
     }, []),
 
     setDeckMode: useCallback((deck: 'A' | 'B', mode: PlaybackMode) => {
+      releaseAutomix(`deck ${deck} mode changed`);
       setDeckPlaybackMode(deck, mode);
       dispatch({ type: 'SET_DECK_MODE', deck, mode });
-    }, []),
+    }, [releaseAutomix]),
 
     setDeckVolume: useCallback((deck: 'A' | 'B', volume: number) => {
+      releaseAutomix(`deck ${deck} fader moved`);
       setChannelFader(deck, volume);
       dispatch({ type: 'SET_DECK_VOLUME', deck, volume });
-    }, []),
+    }, [releaseAutomix]),
 
     setDeckEq: useCallback((deck: 'A' | 'B', band: EqBand, value: number) => {
+      releaseAutomix(`deck ${deck} EQ moved`);
       setDeckEq(deck, band, value);
       dispatch({ type: 'SET_DECK_EQ', deck, band, value });
-    }, []),
+    }, [releaseAutomix]),
 
     setDeckFilter: useCallback((deck: 'A' | 'B', value: number) => {
+      releaseAutomix(`deck ${deck} filter moved`);
       setDeckFilter(deck, value);
       dispatch({ type: 'SET_DECK_FILTER', deck, value });
-    }, []),
+    }, [releaseAutomix]),
 
     setDeckPitch: useCallback((deck: 'A' | 'B', rate: number) => {
+      releaseAutomix(`deck ${deck} pitch moved`);
       setDeckPlaybackRate(deck, rate);
       dispatch({ type: 'SET_DECK_PLAYBACK_RATE', deck, rate });
-    }, []),
+    }, [releaseAutomix]),
 
     setCrossfader: useCallback((value: number) => {
-      // Grabbing the crossfader takes over from a running automix transition (and from Auto,
-      // which would otherwise start it again)
-      if (cancelTransition()) {
-        dispatch({ type: 'SET_AUTOMIX_TRANSITIONING', isTransitioning: false });
-        dispatch({ type: 'SET_AUTOMIX_ENABLED', enabled: false });
-        dispatch({ type: 'SET_AUTOMIX_STATUS', status: 'Mix cancelled: crossfader moved' });
-      }
+      releaseAutomix('crossfader moved');
       setCrossfader(value);
       dispatch({ type: 'SET_CROSSFADER', value });
-    }, []),
+    }, [releaseAutomix]),
 
     setMasterVolume: useCallback((volume: number) => {
       setMasterVolume(volume);
@@ -468,17 +517,23 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
         if (!targetBpm) return;
 
+        releaseAutomix(`deck ${deck} synced`);
         syncDeckToTargetBpm(deck, sourceBpm, targetBpm);
         dispatch({ type: 'SET_DECK_PLAYBACK_RATE', deck, rate: targetBpm / sourceBpm });
       },
-      [state.deckA, state.deckB],
+      [state.deckA, state.deckB, releaseAutomix],
     ),
 
     setAutomixEnabled: useCallback((enabled: boolean) => {
       dispatch({ type: 'SET_AUTOMIX_ENABLED', enabled });
+      if (!enabled) dispatch({ type: 'SET_AUTOMIX_STATUS', status: null });
     }, []),
 
-    triggerAutomix: useCallback(() => {
+    setAutomixStatus: useCallback((status: string | null) => {
+      dispatch({ type: 'SET_AUTOMIX_STATUS', status });
+    }, []),
+
+    triggerAutomix: useCallback((timing: MixTiming = 'now') => {
       // The playing deck hands over to the other one (deck A when neither or both play).
       const sourceDeckId: 'A' | 'B' =
         state.deckB.playback.isPlaying && !state.deckA.playback.isPlaying ? 'B' : 'A';
@@ -498,8 +553,23 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       }
 
       const sourceTrackId = source.track.id;
-      const plan = startAutomixTransition(sourceDeckId, sourceAnalysis, targetAnalysis, {
+      const deckFor = { outgoing: sourceDeckId, incoming: targetDeckId } as const;
+      // Controls follow the automation in steps, so they only re-render when it really moves
+      // them; values are snapped to the step, so lane end points land exactly.
+      const shown = new Map<string, number>();
+      const show = (key: string, value: number, step: number, apply: (value: number) => void) => {
+        const snapped = Math.round(value / step) * step;
+        if (shown.get(key) === snapped) return;
+        shown.set(key, snapped);
+        apply(snapped);
+      };
+      let outgoingStopped = false;
+      const plan = startAutomixTransition(sourceDeckId, sourceAnalysis, targetAnalysis, timing, {
+        onIncomingStarted: () => {
+          dispatch({ type: 'SET_DECK_PLAYING', deck: targetDeckId, isPlaying: true });
+        },
         onOutgoingStopped: () => {
+          outgoingStopped = true;
           dispatch({ type: 'SET_DECK_PLAYING', deck: sourceDeckId, isPlaying: false });
           dispatch({ type: 'SET_DECK_VOLUME', deck: sourceDeckId, volume: 1 });
           dispatch({ type: 'SET_DECK_FILTER', deck: sourceDeckId, value: 0 });
@@ -511,10 +581,36 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           dispatch({ type: 'SET_AUTOMIX_TRANSITIONING', isTransitioning: false });
           dispatch({ type: 'SET_AUTOMIX_ACTIVE_DECK', deck: targetDeckId });
           dispatch({ type: 'MARK_PLAYED', trackId: sourceTrackId });
+          dispatch({ type: 'SET_AUTOMIX_STATUS', status: `Mixed into ${target.track?.title || target.track?.fileName}` });
         },
-        onTick: (rates) => {
-          dispatch({ type: 'SET_DECK_PLAYBACK_RATE', deck: 'A', rate: rates.A });
-          dispatch({ type: 'SET_DECK_PLAYBACK_RATE', deck: 'B', rate: rates.B });
+        onTick: (rates, lanes) => {
+          for (const deck of ['A', 'B'] as const) {
+            show(`${deck}.rate`, rates[deck], LIVE_RATE_STEP, (rate) =>
+              dispatch({ type: 'SET_DECK_PLAYBACK_RATE', deck, rate }),
+            );
+          }
+          // Once the outgoing deck has stopped its controls are back at neutral; leave them.
+          const targets = outgoingStopped ? (['incoming'] as const) : (['outgoing', 'incoming'] as const);
+          for (const target of targets) {
+            const deck = deckFor[target];
+            for (const [control, value] of Object.entries(lanes[target])) {
+              if (value === undefined) continue;
+              if (control === 'fader') {
+                show(`${deck}.fader`, value, LIVE_CONTROL_STEP, (volume) =>
+                  dispatch({ type: 'SET_DECK_VOLUME', deck, volume }),
+                );
+              } else if (control === 'filter') {
+                show(`${deck}.filter`, value, LIVE_CONTROL_STEP, (filter) =>
+                  dispatch({ type: 'SET_DECK_FILTER', deck, value: filter }),
+                );
+              } else {
+                const band = control as EqBand;
+                show(`${deck}.${band}`, eqGainToKnob(eqDbToGain(value)), LIVE_CONTROL_STEP, (knob) =>
+                  dispatch({ type: 'SET_DECK_EQ', deck, band, value: knob }),
+                );
+              }
+            }
+          }
         },
       });
       if (!plan) {
@@ -525,11 +621,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       dispatch({ type: 'SET_CROSSFADER', value: 0 });
       dispatch({ type: 'SET_DECK_MODE', deck: 'A', mode: 'stretch' });
       dispatch({ type: 'SET_DECK_MODE', deck: 'B', mode: 'stretch' });
-      dispatch({ type: 'SET_DECK_PLAYING', deck: targetDeckId, isPlaying: true });
       dispatch({ type: 'SET_AUTOMIX_TRANSITIONING', isTransitioning: true });
       dispatch({ type: 'SET_AUTOMIX_ACTIVE_DECK', deck: sourceDeckId });
       dispatch({ type: 'SET_AUTOMIX_STATUS', status: describePlan(plan) });
     }, [state.deckA, state.deckB]),
+
+    releaseAutomix,
 
     addToQueue: useCallback(
       (trackId: string) => {

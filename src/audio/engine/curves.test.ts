@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { crossfaderGains, eqKnobToGain, filterKnobToCutoffs } from './curves';
+import { crossfaderGains, eqGainToKnob, eqKnobToGain, filterKnobToCutoffs } from './curves';
 
 describe('crossfaderGains', () => {
   it('plays both decks at full level in the centre and one at each side', () => {
@@ -27,6 +27,14 @@ describe('eqKnobToGain', () => {
     expect(eqKnobToGain(0)).toBe(1);
     expect(20 * Math.log10(eqKnobToGain(1))).toBeCloseTo(6, 9);
     expect(20 * Math.log10(eqKnobToGain(-0.5))).toBeCloseTo(-12.04, 2);
+  });
+});
+
+describe('eqGainToKnob', () => {
+  it('inverts eqKnobToGain across the knob range', () => {
+    for (const knob of [-1, -0.75, -0.5, -0.1, 0, 0.3, 1]) {
+      expect(eqGainToKnob(eqKnobToGain(knob))).toBeCloseTo(knob, 9);
+    }
   });
 });
 

@@ -160,8 +160,8 @@ export function Mixer({
           className="automix-trigger-button"
           onClick={onTriggerAutomix}
           disabled={!canTriggerAutomix}
-          title="Plan and run a phrase-aligned transition into the other deck">
-          Mix
+          title="Mix into the other deck at the next 16/32-bar entry">
+          Mix now
         </button>
       </div>
 

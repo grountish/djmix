@@ -22,6 +22,13 @@ export function eqKnobToGain(position: number): number {
   return Math.pow(10, (6 * p) / 20);
 }
 
+/** Inverse of eqKnobToGain: the knob position that gives `gain`. */
+export function eqGainToKnob(gain: number): number {
+  if (gain <= 0) return -1;
+  if (gain <= 1) return Math.sqrt(gain) - 1;
+  return clamp((20 * Math.log10(gain)) / 6, 0, 1);
+}
+
 /** Lowest low-pass and highest high-pass cutoff of the filter knob's sweep. */
 const FILTER_LOWPASS_MIN_HZ = 150;
 const FILTER_HIGHPASS_MAX_HZ = 8000;
