@@ -51,14 +51,12 @@ interface MixerProps {
   volumeB: number;
   automixEnabled: boolean;
   canTriggerAutomix: boolean;
-  crossfadeDuration: number;
   onCrossfaderChange: (value: number) => void;
   onMasterVolumeChange: (volume: number) => void;
   onVolumeAChange: (volume: number) => void;
   onVolumeBChange: (volume: number) => void;
   onAutomixToggle: () => void;
   onTriggerAutomix: () => void;
-  onCrossfadeDurationChange: (duration: number) => void;
 }
 
 export function Mixer({
@@ -72,14 +70,12 @@ export function Mixer({
   volumeB,
   automixEnabled,
   canTriggerAutomix,
-  crossfadeDuration,
   onCrossfaderChange,
   onMasterVolumeChange,
   onVolumeAChange,
   onVolumeBChange,
   onAutomixToggle,
   onTriggerAutomix,
-  onCrossfadeDurationChange,
 }: MixerProps) {
   return (
     <div className="mixer-section">
@@ -164,22 +160,9 @@ export function Mixer({
           className="automix-trigger-button"
           onClick={onTriggerAutomix}
           disabled={!canTriggerAutomix}
-          title="Start transition on the next beat">
+          title="Plan and run a phrase-aligned transition into the other deck">
           Mix
         </button>
-        <div className="crossfade-duration">
-          <input
-            type="range"
-            className="duration-slider"
-            min="2"
-            max="32"
-            step="1"
-            value={crossfadeDuration}
-            onChange={(e) => onCrossfadeDurationChange(Number(e.target.value))}
-            title="Crossfade duration in seconds"
-          />
-          <span className="duration-label">{crossfadeDuration}s</span>
-        </div>
       </div>
 
       <div className="master-volume">

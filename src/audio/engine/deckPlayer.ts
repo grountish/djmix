@@ -65,6 +65,17 @@ export class DeckPlayer {
     return this.keyLock;
   }
 
+  /** Semitones the deck is pitch-shifted by while key lock is on. */
+  get keyShift(): number {
+    return this.keyLock ? this.semitones : 0;
+  }
+
+  /** Current playback rate (the rate in effect now, not a pending change). */
+  get currentRate(): number {
+    if (!this.playing) return this.rate;
+    return this.anchorAt(this.ctx.currentTime).rate;
+  }
+
   /** Loads a track; with a stretch factory the stretcher gets its own copy of the audio. */
   load(buffer: AudioBuffer): Promise<void> {
     this.loading = this.loading.then(async () => {

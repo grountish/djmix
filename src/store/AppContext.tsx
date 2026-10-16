@@ -12,7 +12,6 @@ import {
   setDeckPlaybackRate,
   isDeckEnginePlaying,
   forceStopDeck,
-  getDeckAnchor,
 } from '@/audio/playbackEngine';
 import { isElectronEnvironment } from '@/audio/fileImporter';
 import {
@@ -23,7 +22,7 @@ import {
   setDeckFilter,
   setMasterVolume,
 } from '@/audio/mixingEngine';
-import { cancelTransition, triggerTransition } from '@/audio/automixController';
+import { cancelTransition, describePlan, startAutomixTransition } from '@/audio/automixController';
 
 interface AppState {
   tracks: Track[];
@@ -38,7 +37,8 @@ interface AppState {
     enabled: boolean;
     isTransitioning: boolean;
     activeDeck: 'A' | 'B' | null;
-    crossfadeDuration: number;
+    /** What the last transition plan does, for the status bar. */
+    status: string | null;
   };
 }
 
@@ -63,7 +63,7 @@ type Action =
   | { type: 'SET_AUTOMIX_ENABLED'; enabled: boolean }
   | { type: 'SET_AUTOMIX_TRANSITIONING'; isTransitioning: boolean }
   | { type: 'SET_AUTOMIX_ACTIVE_DECK'; deck: 'A' | 'B' | null }
-  | { type: 'SET_AUTOMIX_CROSSFADE_DURATION'; duration: number };
+  | { type: 'SET_AUTOMIX_STATUS'; status: string | null };
 
 const createInitialDeckState = (): DeckState => ({
   track: null,
@@ -93,7 +93,7 @@ const initialState: AppState = {
     enabled: false,
     isTransitioning: false,
     activeDeck: null,
-    crossfadeDuration: 8,
+    status: null,
   },
 };
 
@@ -243,11 +243,8 @@ function reducer(state: AppState, action: Action): AppState {
         automix: { ...state.automix, activeDeck: action.deck },
       };
 
-    case 'SET_AUTOMIX_CROSSFADE_DURATION':
-      return {
-        ...state,
-        automix: { ...state.automix, crossfadeDuration: action.duration },
-      };
+    case 'SET_AUTOMIX_STATUS':
+      return { ...state, automix: { ...state.automix, status: action.status } };
 
     default:
       return state;
@@ -276,7 +273,6 @@ interface AppContextValue {
     setReferenceTrack: (trackId: string | null) => void;
     syncToTarget: (deck: 'A' | 'B') => void;
     setAutomixEnabled: (enabled: boolean) => void;
-    setAutomixCrossfadeDuration: (duration: number) => void;
     triggerAutomix: () => void;
   };
 }
@@ -425,88 +421,54 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       dispatch({ type: 'SET_AUTOMIX_ENABLED', enabled });
     }, []),
 
-    setAutomixCrossfadeDuration: useCallback((duration: number) => {
-      dispatch({ type: 'SET_AUTOMIX_CROSSFADE_DURATION', duration });
-    }, []),
-
     triggerAutomix: useCallback(() => {
-      // Determine source deck based on crossfader position
-      // crossfader <= 0 means we're on A side, so A is source and we fade to B
-      // crossfader > 0 means we're on B side, so B is source and we fade to A
-      const crossfaderValue = state.crossfader;
-      const sourceDeckId: 'A' | 'B' = crossfaderValue <= 0 ? 'A' : 'B';
+      // The playing deck hands over to the other one (deck A when neither or both play).
+      const sourceDeckId: 'A' | 'B' =
+        state.deckB.playback.isPlaying && !state.deckA.playback.isPlaying ? 'B' : 'A';
       const targetDeckId: 'A' | 'B' = sourceDeckId === 'A' ? 'B' : 'A';
-
-      const sourceDeckState = sourceDeckId === 'A' ? state.deckA : state.deckB;
-      const targetDeckState = targetDeckId === 'A' ? state.deckA : state.deckB;
-
-      // Check if source deck has a track with analysis
-      if (!sourceDeckState.track?.analysis) {
-        console.log('Automix: Source deck has no track or no analysis');
+      const source = sourceDeckId === 'A' ? state.deckA : state.deckB;
+      const target = targetDeckId === 'A' ? state.deckA : state.deckB;
+      if (!source.track?.analysis || !target.track?.analysis) {
+        dispatch({ type: 'SET_AUTOMIX_STATUS', status: 'Mix: both decks need an analysed track' });
         return;
       }
 
-      // Check if target deck has a track with analysis
-      if (!targetDeckState.track?.analysis) {
-        console.log('Automix: Target deck has no track or no analysis');
-        return;
-      }
-
-      // Ensure source deck is playing before starting the mix
-      if (!sourceDeckState.playback.isPlaying) {
+      if (!isDeckEnginePlaying(sourceDeckId)) {
         playDeck(sourceDeckId);
         dispatch({ type: 'SET_DECK_PLAYING', deck: sourceDeckId, isPlaying: true });
       }
 
-      // Trigger the transition - this will sync BPM and start on the next bar
-      const started = triggerTransition(
-        sourceDeckId,
-        sourceDeckState,
-        targetDeckState,
-        {
-          onSyncBpm: (deck: 'A' | 'B') => {
-            const dState = deck === 'A' ? state.deckA : state.deckB;
-            const otherState = deck === 'A' ? state.deckB : state.deckA;
-            const track = dState.track;
-            const otherTrack = otherState.track;
-
-            if (!track?.analysis?.bpm || !otherTrack?.analysis?.bpm) return;
-
-            const sourceBpm = track.analysis.manualBpm || track.analysis.bpm;
-            const targetBpm = otherTrack.analysis.manualBpm || otherTrack.analysis.bpm;
-            syncDeckToTargetBpm(deck, sourceBpm, targetBpm);
-            dispatch({ type: 'SET_DECK_PLAYBACK_RATE', deck, rate: targetBpm / sourceBpm });
-          },
-          getAnchor: getDeckAnchor,
-          onStartPlay: (deck: 'A' | 'B', when: number) => {
-            playDeck(deck, when);
-            dispatch({ type: 'SET_DECK_PLAYING', deck, isPlaying: true });
-          },
-          onStopDeck: (deck: 'A' | 'B') => {
-            // Pause the outgoing deck after the transition completes
-            forceStopDeck(deck);
-            dispatch({ type: 'SET_DECK_PLAYING', deck, isPlaying: false });
-          },
-          onSeek: (deck: 'A' | 'B', time: number) => {
-            seekDeck(deck, time);
-            dispatch({ type: 'SET_DECK_TIME', deck, currentTime: time });
-          },
-          onCrossfaderDisplay: (value: number) => {
-            dispatch({ type: 'SET_CROSSFADER', value });
-          },
-          onTransitionComplete: () => {
-            dispatch({ type: 'SET_AUTOMIX_TRANSITIONING', isTransitioning: false });
-            dispatch({ type: 'SET_AUTOMIX_ACTIVE_DECK', deck: targetDeckId });
-          },
+      const plan = startAutomixTransition(sourceDeckId, source.track.analysis, target.track.analysis, {
+        onOutgoingStopped: () => {
+          dispatch({ type: 'SET_DECK_PLAYING', deck: sourceDeckId, isPlaying: false });
+          dispatch({ type: 'SET_DECK_VOLUME', deck: sourceDeckId, volume: 1 });
+          dispatch({ type: 'SET_DECK_FILTER', deck: sourceDeckId, value: 0 });
+          for (const band of ['low', 'mid', 'high'] as const) {
+            dispatch({ type: 'SET_DECK_EQ', deck: sourceDeckId, band, value: 0 });
+          }
         },
-        state.automix.crossfadeDuration,
-      );
-
-      if (started) {
-        dispatch({ type: 'SET_AUTOMIX_TRANSITIONING', isTransitioning: true });
-        dispatch({ type: 'SET_AUTOMIX_ACTIVE_DECK', deck: sourceDeckId });
+        onFinished: () => {
+          dispatch({ type: 'SET_AUTOMIX_TRANSITIONING', isTransitioning: false });
+          dispatch({ type: 'SET_AUTOMIX_ACTIVE_DECK', deck: targetDeckId });
+        },
+        onTick: (rates) => {
+          dispatch({ type: 'SET_DECK_PLAYBACK_RATE', deck: 'A', rate: rates.A });
+          dispatch({ type: 'SET_DECK_PLAYBACK_RATE', deck: 'B', rate: rates.B });
+        },
+      });
+      if (!plan) {
+        dispatch({ type: 'SET_AUTOMIX_STATUS', status: 'Mix: could not start the transition' });
+        return;
       }
-    }, [state.deckA, state.deckB, state.crossfader, state.automix.crossfadeDuration]),
+
+      dispatch({ type: 'SET_CROSSFADER', value: 0 });
+      dispatch({ type: 'SET_DECK_MODE', deck: 'A', mode: 'stretch' });
+      dispatch({ type: 'SET_DECK_MODE', deck: 'B', mode: 'stretch' });
+      dispatch({ type: 'SET_DECK_PLAYING', deck: targetDeckId, isPlaying: true });
+      dispatch({ type: 'SET_AUTOMIX_TRANSITIONING', isTransitioning: true });
+      dispatch({ type: 'SET_AUTOMIX_ACTIVE_DECK', deck: sourceDeckId });
+      dispatch({ type: 'SET_AUTOMIX_STATUS', status: describePlan(plan) });
+    }, [state.deckA, state.deckB]),
   };
 
   return <AppContext.Provider value={{ state, actions }}>{children}</AppContext.Provider>;

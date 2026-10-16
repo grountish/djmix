@@ -1223,3 +1223,10 @@ select {
         display: flex;
         justify-content: space-between;
 }
+.automix-status {
+        max-width: 70%;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        color: var(--accent);
+}

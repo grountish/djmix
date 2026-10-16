@@ -1,97 +1,104 @@
-import type { DeckState } from '@/types';
-import { getAudioContext } from './decoder';
-import { clamp } from './engine/curves';
+import type { TrackAnalysis } from '@/types';
+import { getMixGraph } from './engine/liveGraph';
 import type { DeckId } from './engine/mixGraph';
-import { STRETCH_LEAD } from './engine/stretch';
-import { type BeatGrid, nextBarOnClock, type PlayheadAnchor } from './engine/transport';
-import { scheduleCrossfade } from './mixingEngine';
+import { planTransition, type TransitionPlan } from './mix/planner';
+import { TransitionRunner } from './mix/runner';
+import { trackClock } from './mix/trackClock';
+import { getDeckPlayer, trackDeckTime } from './playbackEngine';
 
-export interface TransitionCallbacks {
-  onSyncBpm: (deck: DeckId) => void;
-  /** Where a playing deck's playhead sits on the audio clock. */
-  getAnchor: (deck: DeckId) => PlayheadAnchor | null;
-  onSeek: (deck: DeckId, time: number) => void;
-  /** Start the deck exactly at audio-clock time `when`. */
-  onStartPlay: (deck: DeckId, when: number) => void;
-  /** UI only: the audio clock already automates the crossfader. */
-  onCrossfaderDisplay: (value: number) => void;
-  onStopDeck: (deck: DeckId) => void;
-  onTransitionComplete: () => void;
+export interface AutomixCallbacks {
+  onOutgoingStopped: () => void;
+  onFinished: () => void;
+  /** Each tick, with every deck's current playback rate (for the UI). */
+  onTick?: (rates: Record<DeckId, number>) => void;
 }
 
-/** Keeps the scheduled start safely ahead of the audio thread and the key-lock stretcher. */
-const MIN_SCHEDULE_LEAD = STRETCH_LEAD + 0.1;
+/** Dispatch tick; timers keep running while the window is hidden (Electron throttling off). */
+const DISPATCH_INTERVAL_MS = 30;
 
-/** UI refresh and completion check; timers keep running while the window is hidden. */
-const MONITOR_INTERVAL_MS = 30;
+let active: { runner: TransitionRunner; timer: ReturnType<typeof setInterval> } | null = null;
 
-let monitorTimer: ReturnType<typeof setInterval> | null = null;
+/** Tempo the analysis is read at: a manual BPM correction wins. */
+function readBpm(analysis: TrackAnalysis): number {
+  return analysis.manualBpm ?? analysis.bpm;
+}
 
 /**
- * Beat-synced transition: the next deck starts exactly on the current deck's next bar line
- * and the crossfade runs on the audio clock. Returns false when the transition can't start.
+ * Plans and starts a transition from the playing `outgoingId` deck into the other deck: tempo
+ * meeting point, phrase-aligned mix points, key shift and EQ blend, all on the audio clock.
+ * Returns the plan, or null when the decks aren't ready.
  */
-export function triggerTransition(
-  currentDeckId: DeckId,
-  currentDeckState: DeckState,
-  nextDeckState: DeckState,
-  callbacks: TransitionCallbacks,
-  crossfadeDuration: number = 8,
-): boolean {
+export function startAutomixTransition(
+  outgoingId: DeckId,
+  outgoing: TrackAnalysis,
+  incoming: TrackAnalysis,
+  callbacks: AutomixCallbacks,
+): TransitionPlan | null {
   cancelTransition();
+  const incomingId: DeckId = outgoingId === 'A' ? 'B' : 'A';
+  const outgoingPlayer = getDeckPlayer(outgoingId);
+  const incomingPlayer = getDeckPlayer(incomingId);
+  if (!outgoingPlayer.isPlaying || !incomingPlayer.audioBuffer) return null;
 
-  const currentAnalysis = currentDeckState.track?.analysis;
-  const nextAnalysis = nextDeckState.track?.analysis;
-  const nextDeckId: DeckId = currentDeckId === 'A' ? 'B' : 'A';
+  const plan = planTransition({
+    outgoing: {
+      analysis: outgoing,
+      bpm: readBpm(outgoing),
+      trackTime: outgoingPlayer.currentTime(),
+      rate: outgoingPlayer.currentRate,
+      semitones: outgoingPlayer.keyShift,
+    },
+    incoming: { analysis: incoming, bpm: readBpm(incoming) },
+  });
 
-  if (!currentAnalysis || !nextAnalysis) {
-    console.log('Automix: Both tracks need analysis for transition');
-    return false;
-  }
+  const graph = getMixGraph();
+  const runner = new TransitionRunner(
+    graph.ctx,
+    graph,
+    { id: outgoingId, player: outgoingPlayer, clock: trackClock(outgoing, readBpm(outgoing)) },
+    { id: incomingId, player: incomingPlayer, clock: trackClock(incoming, readBpm(incoming)) },
+    plan,
+    {
+      onOutgoingStopped: callbacks.onOutgoingStopped,
+      onFinished: () => {
+        stopTimer();
+        callbacks.onFinished();
+      },
+    },
+  );
+  runner.start();
+  trackDeckTime(incomingId);
 
-  // Sync BPM of the next deck to current
-  callbacks.onSyncBpm(nextDeckId);
+  const timer = setInterval(() => {
+    runner.dispatch(graph.ctx.currentTime);
+    callbacks.onTick?.({ A: getDeckPlayer('A').currentRate, B: getDeckPlayer('B').currentRate });
+  }, DISPATCH_INTERVAL_MS);
+  active = { runner, timer };
+  return plan;
+}
 
-  const anchor = callbacks.getAnchor(currentDeckId);
-  if (!anchor) {
-    console.log('Automix: Current deck is not playing');
-    return false;
-  }
+function stopTimer(): void {
+  if (active) clearInterval(active.timer);
+  active = null;
+}
 
-  const ctx = getAudioContext();
-  const grid: BeatGrid = {
-    bpm: currentAnalysis.manualBpm || currentAnalysis.bpm,
-    firstBeatTime: currentAnalysis.firstBeatTime || 0,
-  };
-  const start = nextBarOnClock(anchor, grid, ctx.currentTime, MIN_SCHEDULE_LEAD);
-
-  callbacks.onSeek(nextDeckId, nextAnalysis.firstBeatTime || 0);
-  callbacks.onStartPlay(nextDeckId, start.ctxTime);
-
-  const from = currentDeckId === 'A' ? -1 : 1;
-  const to = -from;
-  scheduleCrossfade(from, to, start.ctxTime, crossfadeDuration);
-
-  const endTime = start.ctxTime + crossfadeDuration;
-  monitorTimer = setInterval(() => {
-    const now = ctx.currentTime;
-    const progress = clamp((now - start.ctxTime) / crossfadeDuration, 0, 1);
-    callbacks.onCrossfaderDisplay(from + (to - from) * progress);
-
-    if (now >= endTime) {
-      cancelTransition();
-      callbacks.onStopDeck(currentDeckId);
-      callbacks.onTransitionComplete();
-    }
-  }, MONITOR_INTERVAL_MS);
-
+/** Stops a running transition where it is (both decks keep playing). Returns true if one ran. */
+export function cancelTransition(): boolean {
+  if (!active) return false;
+  active.runner.cancel();
+  stopTimer();
   return true;
 }
 
-/** Stops tracking a running transition. Returns true if one was running. */
-export function cancelTransition(): boolean {
-  if (monitorTimer === null) return false;
-  clearInterval(monitorTimer);
-  monitorTimer = null;
-  return true;
+/** One line for the status bar. */
+export function describePlan(plan: TransitionPlan): string {
+  const tempo = `${plan.tempo.meetBpm.toFixed(1)} BPM`;
+  const keys = `${plan.harmonic.outgoingKey}→${plan.harmonic.incomingKey}`;
+  const shift = plan.incomingSemitones ? ` (${plan.incomingSemitones > 0 ? '+' : ''}${plan.incomingSemitones} st)` : '';
+  const what =
+    plan.kind === 'blend'
+      ? `${plan.overlapBars}-bar blend at bar ${plan.outgoingStartBar + 1}, bass swap at bar ${plan.outgoingStartBar + plan.bassSwapBar + 1}`
+      : `cut at bar ${plan.outgoingStartBar + 1}`;
+  const warnings = plan.warnings.length ? ` · ⚠ ${plan.warnings.join('; ')}` : '';
+  return `Mix: ${what} · ${tempo} · ${keys}${shift}${warnings}`;
 }

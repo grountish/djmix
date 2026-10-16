@@ -1,4 +1,4 @@
-import limiterSource from './limiter.worklet.js?raw';
+import { LIMITER_WORKLET_SOURCE } from './limiterWorklet';
 import type { MixGraph } from './mixGraph';
 
 /** Sample-peak ceiling; the margin below 0 dBFS absorbs inter-sample peaks (≈ -1 dBTP). */
@@ -10,7 +10,7 @@ const loaded = new WeakMap<BaseAudioContext, Promise<void>>();
 export async function createLimiter(ctx: BaseAudioContext): Promise<AudioWorkletNode> {
   let ready = loaded.get(ctx);
   if (!ready) {
-    const url = URL.createObjectURL(new Blob([limiterSource], { type: 'text/javascript' }));
+    const url = URL.createObjectURL(new Blob([LIMITER_WORKLET_SOURCE], { type: 'text/javascript' }));
     ready = ctx.audioWorklet.addModule(url);
     loaded.set(ctx, ready);
   }

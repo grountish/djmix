@@ -14,7 +14,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "analyze": "tsx scripts/analyze.ts"
+    "analyze": "tsx scripts/analyze.ts",
+    "mixlab": "tsx scripts/mixlab.ts"
   },
   "keywords": [
     "dj",

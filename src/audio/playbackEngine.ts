@@ -99,6 +99,16 @@ export function getDeckDuration(deckId: DeckId): number {
   return getDeck(deckId).player.duration;
 }
 
+/** The deck's player, for code that schedules it directly (automix). */
+export function getDeckPlayer(deckId: DeckId): DeckPlayer {
+  return getDeck(deckId).player;
+}
+
+/** Keeps UI time updates running for a deck started outside playDeck(). */
+export function trackDeckTime(deckId: DeckId): void {
+  startTimeTracking(getDeck(deckId));
+}
+
 /** Where the deck's playhead sits on the audio clock; null when stopped. */
 export function getDeckAnchor(deckId: DeckId): PlayheadAnchor | null {
   return getDeck(deckId).player.getAnchor();

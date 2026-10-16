@@ -277,17 +277,13 @@ export function App() {
               volumeA={state.deckA.playback.volume}
               volumeB={state.deckB.playback.volume}
               automixEnabled={state.automix.enabled}
-              canTriggerAutomix={
-                state.deckA.track?.analysis !== null && state.deckB.track?.analysis !== null
-              }
-              crossfadeDuration={state.automix.crossfadeDuration}
+              canTriggerAutomix={!!state.deckA.track?.analysis && !!state.deckB.track?.analysis}
               onCrossfaderChange={actions.setCrossfader}
               onMasterVolumeChange={actions.setMasterVolume}
               onVolumeAChange={(volume) => actions.setDeckVolume('A', volume)}
               onVolumeBChange={(volume) => actions.setDeckVolume('B', volume)}
               onAutomixToggle={() => actions.setAutomixEnabled(!state.automix.enabled)}
               onTriggerAutomix={actions.triggerAutomix}
-              onCrossfadeDurationChange={actions.setAutomixCrossfadeDuration}
             />
 
             <Deck
@@ -323,7 +319,13 @@ export function App() {
           Deck A: {state.deckA.track?.fileName || 'Empty'} | Deck B:{' '}
           {state.deckB.track?.fileName || 'Empty'}
         </span>
-        <span>Crossfader: {Math.round(state.crossfader * 100)}%</span>
+        {state.automix.status ? (
+          <span className="automix-status" title={state.automix.status}>
+            {state.automix.status}
+          </span>
+        ) : (
+          <span>Crossfader: {Math.round(state.crossfader * 100)}%</span>
+        )}
       </footer>
     </div>
   );

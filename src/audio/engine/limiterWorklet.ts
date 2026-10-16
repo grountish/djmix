@@ -1,3 +1,6 @@
+// AudioWorklet module source for the master limiter, kept as a string so it loads the same way
+// in the app (Blob URL), in tests and in Node scripts, without bundler-specific imports.
+export const LIMITER_WORKLET_SOURCE = `
 // Lookahead brickwall limiter, linked across channels.
 //
 // Gain needed per sample -> minimum over the lookahead window (so the gain is already down when
@@ -77,3 +80,4 @@ class LookaheadLimiter extends AudioWorkletProcessor {
 }
 
 registerProcessor('lookahead-limiter', LookaheadLimiter);
+`;
