@@ -1,6 +1,13 @@
-import type { AudioAnalysis } from '@/audio/analysis/types';
+import type { AnalysisOverrides, AudioAnalysis } from '@/audio/analysis/types';
 
-export type { AudioAnalysis, Phrase, PhraseLabel, TrackKey } from '@/audio/analysis/types';
+export type {
+  AnalysisOverrides,
+  AudioAnalysis,
+  Phrase,
+  PhraseLabel,
+  TempoMultiplier,
+  TrackKey,
+} from '@/audio/analysis/types';
 export type { EqBand } from '@/audio/engine/mixGraph';
 import type { EqBand } from '@/audio/engine/mixGraph';
 
@@ -29,9 +36,12 @@ export interface Track {
   tagKey?: string;
   /** BPM as tagged in the file. */
   tagBpm?: number;
+  /** The user's corrections; read the analysis through `effectiveAnalysis(track)`. */
+  overrides?: AnalysisOverrides;
 }
 
 export interface TrackAnalysis extends AudioAnalysis {
+  /** @deprecated Never written; tempo fixes live in `Track.overrides`. */
   manualBpm?: number;
   analyzedAt: string;
   cacheKey: string;

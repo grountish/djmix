@@ -512,6 +512,74 @@ select {
         border-color: var(--accent);
 }
 
+/* Analysis corrections row (tempo octave, grid, downbeat, key) */
+.deck-fix-row {
+        display: flex;
+        align-items: center;
+        gap: 4px 10px;
+        flex-wrap: wrap;
+        padding-top: 6px;
+        border-top: 1px solid var(--border);
+}
+
+.fix-group {
+        display: flex;
+        align-items: center;
+        gap: 1px;
+}
+
+.fix-label {
+        font-size: 9px;
+        color: var(--text-dim);
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        margin-right: 4px;
+}
+
+.fix-label.active {
+        color: var(--accent);
+}
+
+.fix-button {
+        min-width: 24px;
+        padding: 3px 5px;
+        line-height: 1;
+}
+
+.fix-readout {
+        min-width: 44px;
+        text-align: center;
+        font-size: 9px;
+        font-family: 'SF Mono', 'Menlo', 'Monaco', monospace;
+        color: var(--text-muted);
+}
+
+.fix-select {
+        padding: 2px 4px;
+        font-size: 10px;
+        font-family: 'SF Mono', 'Menlo', 'Monaco', monospace;
+        background: var(--bg-primary);
+}
+
+.fix-select.active {
+        border-color: var(--accent);
+        color: var(--accent);
+}
+
+.fix-reset {
+        margin-left: auto;
+}
+
+.override-dot {
+        display: inline-block;
+        width: 5px;
+        height: 5px;
+        margin-right: 4px;
+        border-radius: 50%;
+        background: var(--accent);
+        vertical-align: middle;
+}
+
 .deck-volume {
         display: flex;
         align-items: center;
@@ -1034,6 +1102,12 @@ select {
 
 .key-badge.dimmed {
         opacity: 0.3;
+}
+
+.key-badge.manual {
+        text-decoration: underline;
+        text-decoration-thickness: 1px;
+        text-underline-offset: 2px;
 }
 
 .td-bpm .track-bpm {

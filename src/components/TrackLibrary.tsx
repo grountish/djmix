@@ -1,6 +1,9 @@
 import type { Track, SortOption, FilterOptions } from '@/types';
+import { effectiveAnalysis } from '@/audio/analysis/overrides';
 import { harmonicScore } from '@/audio/mix/harmonic';
 import { KeyBadge } from './KeyBadge';
+
+const bpmOf = (track: Track) => effectiveAnalysis(track)?.bpm;
 
 interface TrackLibraryProps {
   tracks: Track[];
@@ -28,8 +31,8 @@ function sortTracks(tracks: Track[], sort: SortOption): Track[] {
 
     switch (sort.field) {
       case 'bpm':
-        aVal = a.analysis?.manualBpm || a.analysis?.bpm || 0;
-        bVal = b.analysis?.manualBpm || b.analysis?.bpm || 0;
+        aVal = bpmOf(a) || 0;
+        bVal = bpmOf(b) || 0;
         break;
       case 'duration':
         aVal = a.duration;
@@ -57,7 +60,7 @@ function filterTracks(tracks: Track[], filter: FilterOptions): Track[] {
       }
     }
 
-    const bpm = track.analysis?.manualBpm || track.analysis?.bpm;
+    const bpm = bpmOf(track);
     if (filter.bpmMin !== undefined && bpm !== undefined && bpm < filter.bpmMin) {
       return false;
     }
@@ -71,8 +74,8 @@ function filterTracks(tracks: Track[], filter: FilterOptions): Track[] {
 
 function sortByBpmSimilarity(tracks: Track[], referenceBpm: number): Track[] {
   return [...tracks].sort((a, b) => {
-    const aBpm = a.analysis?.manualBpm || a.analysis?.bpm || 0;
-    const bBpm = b.analysis?.manualBpm || b.analysis?.bpm || 0;
+    const aBpm = bpmOf(a) || 0;
+    const bBpm = bpmOf(b) || 0;
     const aDiff = Math.abs(aBpm - referenceBpm);
     const bDiff = Math.abs(bBpm - referenceBpm);
     return aDiff - bDiff;
@@ -92,8 +95,9 @@ export function TrackLibrary({
   onSetReference,
 }: TrackLibraryProps) {
   const referenceTrack = referenceTrackId ? tracks.find((t) => t.id === referenceTrackId) : null;
-  const referenceBpm = referenceTrack?.analysis?.manualBpm || referenceTrack?.analysis?.bpm;
-  const referenceKey = referenceTrack?.analysis?.key;
+  const referenceAnalysis = referenceTrack ? effectiveAnalysis(referenceTrack) : null;
+  const referenceBpm = referenceAnalysis?.bpm;
+  const referenceKey = referenceAnalysis?.key;
 
   let displayTracks = filterTracks(tracks, filterOptions);
 
@@ -198,7 +202,8 @@ export function TrackLibrary({
             </thead>
             <tbody>
               {displayTracks.map((track) => {
-                const bpm = track.analysis?.manualBpm || track.analysis?.bpm;
+                const analysis = effectiveAnalysis(track);
+                const bpm = analysis?.bpm;
                 const bpmDiff = referenceBpm && bpm ? Math.abs(bpm - referenceBpm) : null;
 
                 return (
@@ -228,19 +233,21 @@ export function TrackLibrary({
                         {track.analysisStatus === 'complete' && bpm && (
                           <>
                             {bpm.toFixed(1)}
-                            {track.analysis?.manualBpm && '*'}
+                            {track.overrides?.tempoMultiplier && (
+                              <span title="Tempo octave corrected by hand">*</span>
+                            )}
                           </>
                         )}
                       </span>
                     </td>
                     <td className="td-key">
-                      {track.analysis?.key && (
+                      {analysis?.key && (
                         <KeyBadge
-                          trackKey={track.analysis.key}
+                          trackKey={analysis.key}
                           dimmed={
                             !!referenceKey &&
                             track.id !== referenceTrackId &&
-                            harmonicScore(referenceKey, track.analysis.key) < 0.5
+                            harmonicScore(referenceKey, analysis.key) < 0.5
                           }
                         />
                       )}

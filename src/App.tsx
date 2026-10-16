@@ -265,6 +265,7 @@ export function App() {
               onSync={() => actions.syncToTarget('A')}
               onModeChange={(mode) => actions.setDeckMode('A', mode)}
               onPitchChange={(rate) => actions.setDeckPitch('A', rate)}
+              onOverridesChange={actions.setTrackOverrides}
             />
 
             <Mixer
@@ -296,6 +297,7 @@ export function App() {
               onSync={() => actions.syncToTarget('B')}
               onModeChange={(mode) => actions.setDeckMode('B', mode)}
               onPitchChange={(rate) => actions.setDeckPitch('B', rate)}
+              onOverridesChange={actions.setTrackOverrides}
             />
           </div>
         </div>

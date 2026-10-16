@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useReducer, useCallback } from 'react';
-import type { Track, DeckState, EqBand, PlaybackMode, SortOption, FilterOptions } from '@/types';
+import type { AnalysisOverrides, Track, DeckState, EqBand, PlaybackMode, SortOption, FilterOptions } from '@/types';
+import { effectiveAnalysis } from '@/audio/analysis/overrides';
 import {
   loadTrackToDeck,
   loadAudioBufferToDeck,
@@ -52,6 +53,7 @@ interface AppState {
 type Action =
   | { type: 'ADD_TRACKS'; tracks: Track[] }
   | { type: 'UPDATE_TRACK'; track: Track }
+  | { type: 'SET_TRACK_OVERRIDES'; trackId: string; overrides: AnalysisOverrides | undefined }
   | { type: 'REMOVE_TRACK'; trackId: string }
   | { type: 'SET_SORT'; sortOption: SortOption }
   | { type: 'SET_FILTER'; filterOptions: FilterOptions }
@@ -120,6 +122,19 @@ function reducer(state: AppState, action: Action): AppState {
         ...state,
         tracks: state.tracks.map((t) => (t.id === action.track.id ? action.track : t)),
       };
+
+    case 'SET_TRACK_OVERRIDES': {
+      // Decks hold their own copy of the track: update it too so they redraw at once.
+      const withOverrides = (t: Track): Track =>
+        t.id === action.trackId ? { ...t, overrides: action.overrides } : t;
+      const deck = (d: DeckState): DeckState => (d.track ? { ...d, track: withOverrides(d.track) } : d);
+      return {
+        ...state,
+        tracks: state.tracks.map(withOverrides),
+        deckA: deck(state.deckA),
+        deckB: deck(state.deckB),
+      };
+    }
 
     case 'REMOVE_TRACK':
       return {
@@ -281,6 +296,8 @@ interface AppContextValue {
   actions: {
     addTracks: (tracks: Track[]) => void;
     updateTrack: (track: Track) => void;
+    /** Stores the user's analysis corrections on the library track and any deck copy of it. */
+    setTrackOverrides: (trackId: string, overrides: AnalysisOverrides | undefined) => void;
     removeTrack: (trackId: string) => void;
     setSort: (sortOption: SortOption) => void;
     setFilter: (filterOptions: FilterOptions) => void;
@@ -321,6 +338,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
     updateTrack: useCallback((track: Track) => {
       dispatch({ type: 'UPDATE_TRACK', track });
+    }, []),
+
+    setTrackOverrides: useCallback((trackId: string, overrides: AnalysisOverrides | undefined) => {
+      dispatch({ type: 'SET_TRACK_OVERRIDES', trackId, overrides });
     }, []),
 
     removeTrack: useCallback((trackId: string) => {
@@ -433,13 +454,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         const otherTrack = otherDeckState.track;
 
         // Get source BPM from current deck
-        if (!track?.analysis?.bpm) return;
-        const sourceBpm = track.analysis.manualBpm || track.analysis.bpm;
+        const sourceBpm = track && effectiveAnalysis(track)?.bpm;
+        if (!sourceBpm) return;
 
         // Get target BPM from other deck's track, or fall back to manual targetBpm
         let targetBpm: number | null = null;
-        if (otherTrack?.analysis?.bpm) {
-          targetBpm = otherTrack.analysis.manualBpm || otherTrack.analysis.bpm;
+        const otherBpm = otherTrack && effectiveAnalysis(otherTrack)?.bpm;
+        if (otherBpm) {
+          targetBpm = otherBpm;
         } else if (deckState.targetBpm) {
           targetBpm = deckState.targetBpm;
         }

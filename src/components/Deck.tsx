@@ -1,6 +1,8 @@
 import { useState, useRef, useCallback } from 'react';
-import type { DeckState, PlaybackMode } from '@/types';
+import type { AnalysisOverrides, DeckState, PlaybackMode } from '@/types';
+import { effectiveAnalysis, hasCorrections, resolveOverrides } from '@/audio/analysis/overrides';
 import { KeyBadge } from './KeyBadge';
+import { OverrideControls } from './OverrideControls';
 import { Waveform, EmptyWaveform } from './Waveform';
 
 interface DeckProps {
@@ -13,6 +15,7 @@ interface DeckProps {
   onSync: () => void;
   onModeChange: (mode: PlaybackMode) => void;
   onPitchChange: (rate: number) => void;
+  onOverridesChange: (trackId: string, overrides: AnalysisOverrides | undefined) => void;
 }
 
 function formatTime(seconds: number): string {
@@ -33,6 +36,7 @@ export function Deck({
   onSync,
   onModeChange,
   onPitchChange,
+  onOverridesChange,
 }: DeckProps) {
   const { track, playback, targetBpm, playbackMode } = state;
   const [targetBpmInput, setTargetBpmInput] = useState(targetBpm?.toString() || '');
@@ -66,7 +70,9 @@ export function Deck({
     [onPitchChange],
   );
 
-  const effectiveBpm = track?.analysis?.manualBpm || track?.analysis?.bpm;
+  const analysis = track ? effectiveAnalysis(track) : null;
+  const corrected = !!track?.analysis && hasCorrections(resolveOverrides(track.analysis, track.overrides));
+  const effectiveBpm = analysis?.bpm;
 
   // Both modes change tempo; key lock only keeps the pitch
   const currentBpm = effectiveBpm ? effectiveBpm * playback.playbackRate : null;
@@ -103,8 +109,11 @@ export function Deck({
         </div>
         <div className="deck-bpm-display">
           <span className="bpm-value">{effectiveBpm ? effectiveBpm.toFixed(1) : '--'}</span>
-          <span className="bpm-label">BPM</span>
-          {track?.analysis?.key && <KeyBadge trackKey={track.analysis.key} />}
+          <span className="bpm-label">
+            {corrected && <span className="override-dot" title="Analysis corrected by hand" />}
+            BPM
+          </span>
+          {analysis?.key && <KeyBadge trackKey={analysis.key} />}
           {currentBpm && currentBpm !== effectiveBpm && (
             <span className="bpm-current">{currentBpm.toFixed(1)}</span>
           )}
@@ -119,9 +128,9 @@ export function Deck({
               spectralData={track.spectralWaveform}
               currentTime={playback.currentTime}
               duration={playback.duration}
-              bpm={track.analysis?.manualBpm || track.analysis?.bpm}
-              firstBeatTime={track.analysis?.firstBeatTime}
-              phrases={track.analysis?.phrases}
+              bpm={analysis?.bpm}
+              firstBeatTime={analysis?.firstBeatTime}
+              phrases={analysis?.phrases}
               onSeek={onSeek}
             />
           ) : (
@@ -219,6 +228,14 @@ export function Deck({
           </button>
         </div>
       </div>
+
+      {track?.analysis && (
+        <OverrideControls
+          analysis={track.analysis}
+          overrides={track.overrides}
+          onChange={(overrides) => onOverridesChange(track.id, overrides)}
+        />
+      )}
     </div>
   );
 }

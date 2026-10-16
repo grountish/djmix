@@ -57,7 +57,34 @@ export interface TrackKey {
   mode: 'major' | 'minor';
   /** Camelot wheel code, e.g. "8A". */
   camelot: string;
-  /** Margin over the next-best key (0–1); tags count as 1. */
+  /** Margin over the next-best key (0–1); tags and manual keys count as 1. */
   confidence: number;
-  source: 'tag' | 'audio';
+  source: 'tag' | 'audio' | 'manual';
+}
+
+export type TempoMultiplier = 0.5 | 1 | 2;
+
+/**
+ * Corrections the user made to a track's analysis. They live on the library track, apart from
+ * the analysis, so a re-analysis keeps them; `applyOverrides` turns them into a corrected
+ * analysis.
+ */
+export interface AnalysisOverrides {
+  /** Tempo octave fix: 2 when the analyser heard half-time, 0.5 when it heard double-time. */
+  tempoMultiplier?: TempoMultiplier;
+  /** Moves the whole grid later (positive) or earlier, in milliseconds. */
+  gridOffsetMs?: number;
+  /**
+   * Moves the first downbeat, counted in analysed beats. After ×2 a step is half an analysed
+   * beat (one corrected beat); after ÷2 a step is one analysed beat (half a corrected beat), so
+   * an odd shift picks the other half of the analysed beats as the real ones.
+   */
+  downbeatShift?: number;
+  /** Camelot code replacing the tagged or detected key. */
+  key?: string;
+  /**
+   * The analysed grid the grid corrections were made on, and the bar line they produced (s).
+   * When a re-analysis moves the grid, the corrections are re-expressed against the new one.
+   */
+  basis?: { bpm: number; firstBeatTime: number; downbeat: number };
 }
