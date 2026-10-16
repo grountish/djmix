@@ -6,8 +6,11 @@ import { type BeatGrid, ctxTimeAt, nextBarOnClock } from './transport';
 
 const SAMPLE_RATE = 44100;
 
-/** Offline mix whose output channels are deck A and deck B, tapped after the crossfader. */
-function createTappedMix(seconds: number): OfflineMix {
+/**
+ * Offline mix whose output channels are deck A and deck B. Timing taps sit before the EQ
+ * (whose crossovers delay lows by a few ms); level taps sit after the crossfader.
+ */
+function createTappedMix(seconds: number, tap: 'timing' | 'level' = 'level'): OfflineMix {
   const ctx = new OfflineAudioContext({
     numberOfChannels: 2,
     length: Math.round(seconds * SAMPLE_RATE),
@@ -15,8 +18,9 @@ function createTappedMix(seconds: number): OfflineMix {
   });
   const mix = createOfflineMix(ctx, ctx.createGain());
   const taps = ctx.createChannelMerger(2);
-  mix.graph.decks.A.crossfade.connect(taps, 0, 0);
-  mix.graph.decks.B.crossfade.connect(taps, 0, 1);
+  const point = tap === 'timing' ? 'input' : 'crossfade';
+  mix.graph.decks.A[point].connect(taps, 0, 0);
+  mix.graph.decks.B[point].connect(taps, 0, 1);
   taps.connect(ctx.destination);
   return mix;
 }
@@ -53,11 +57,11 @@ function sampleAt(data: Float32Array, seconds: number): number {
 
 describe('offline mix engine', () => {
   it('starts the incoming deck exactly on the outgoing bar line, tempo-synced', async () => {
-    const mix = createTappedMix(8);
+    const mix = createTappedMix(8, 'timing');
     const gridA: BeatGrid = { bpm: 120, firstBeatTime: 0.25 };
     const gridB: BeatGrid = { bpm: 125, firstBeatTime: 0.1 };
-    mix.decks.A.load(clickTrack(mix.ctx, gridA, 10));
-    mix.decks.B.load(clickTrack(mix.ctx, gridB, 10));
+    await mix.decks.A.load(clickTrack(mix.ctx, gridA, 10));
+    await mix.decks.B.load(clickTrack(mix.ctx, gridB, 10));
     mix.decks.A.play(0);
 
     let scheduledAt = 0;
@@ -84,9 +88,9 @@ describe('offline mix engine', () => {
   });
 
   it('keeps the reported playhead on the audio after a rate change mid-play', async () => {
-    const mix = createTappedMix(4);
+    const mix = createTappedMix(4, 'timing');
     const grid: BeatGrid = { bpm: 120, firstBeatTime: 0.1 };
-    mix.decks.A.load(clickTrack(mix.ctx, grid, 10));
+    await mix.decks.A.load(clickTrack(mix.ctx, grid, 10));
     mix.decks.A.play(0);
 
     let anchor = mix.decks.A.getAnchor()!;
@@ -113,7 +117,7 @@ describe('offline mix engine', () => {
 
   it('keeps the channel fader level through seek, pause and play', async () => {
     const mix = createTappedMix(3);
-    mix.decks.A.load(constant(mix.ctx, 1, 10));
+    await mix.decks.A.load(constant(mix.ctx, 1, 10));
     setParamSmooth(mix.graph.decks.A.fader.gain, 0.5, mix.ctx);
     mix.decks.A.play(0);
 
@@ -148,8 +152,8 @@ describe('offline mix engine', () => {
 
   it('runs an equal-power crossfade on the audio clock', async () => {
     const mix = createTappedMix(3);
-    mix.decks.A.load(constant(mix.ctx, 1, 10));
-    mix.decks.B.load(constant(mix.ctx, 1, 10));
+    await mix.decks.A.load(constant(mix.ctx, 1, 10));
+    await mix.decks.B.load(constant(mix.ctx, 1, 10));
     setCrossfaderPosition(mix.graph, -1);
     mix.decks.A.play(0);
     mix.decks.B.play(0);

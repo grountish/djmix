@@ -1,31 +1,27 @@
 declare module '*.css';
 
-declare module 'soundtouchjs' {
-  export class SoundTouch {
-    tempo: number;
-    pitch: number;
-    rate: number;
-    virtualPitch: number;
-    virtualRate: number;
-    virtualTempo: number;
-
-    constructor();
-    clear(): void;
-    flush(): void;
-    putSamples(samples: Float32Array, position: number, numFrames: number): void;
-    receiveSamples(output: Float32Array, maxSamples: number): number;
-    get inputBuffer(): unknown;
-    get outputBuffer(): unknown;
+declare module 'signalsmith-stretch' {
+  export interface StretchChange {
+    /** Audio-context time the change applies at. */
+    output?: number;
+    active?: boolean;
+    /** Position in the loaded buffers, seconds. */
+    input?: number;
+    rate?: number;
+    semitones?: number;
+    tonalityHz?: number;
   }
 
-  export interface FilterSource {
-    extract(target: Float32Array, numFrames: number, position: number): number;
+  export interface StretchNode extends AudioWorkletNode {
+    inputTime: number;
+    schedule(change: StretchChange): Promise<unknown>;
+    addBuffers(buffers: Float32Array[], transfer?: Transferable[]): Promise<number>;
+    dropBuffers(toSeconds?: number): Promise<{ start: number; end: number }>;
+    latency(): Promise<number>;
   }
 
-  export class SimpleFilter {
-    sourcePosition: number;
-
-    constructor(source: FilterSource, soundTouch: SoundTouch);
-    extract(target: Float32Array, numFrames: number): number;
-  }
+  export default function SignalsmithStretch(
+    context: BaseAudioContext,
+    options?: AudioWorkletNodeOptions,
+  ): Promise<StretchNode>;
 }

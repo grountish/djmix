@@ -2,6 +2,7 @@ import type { DeckState } from '@/types';
 import { getAudioContext } from './decoder';
 import { clamp } from './engine/curves';
 import type { DeckId } from './engine/mixGraph';
+import { STRETCH_LEAD } from './engine/stretch';
 import { type BeatGrid, nextBarOnClock, type PlayheadAnchor } from './engine/transport';
 import { scheduleCrossfade } from './mixingEngine';
 
@@ -18,8 +19,8 @@ export interface TransitionCallbacks {
   onTransitionComplete: () => void;
 }
 
-/** Keeps the scheduled start safely ahead of the audio thread. */
-const MIN_SCHEDULE_LEAD = 0.1;
+/** Keeps the scheduled start safely ahead of the audio thread and the key-lock stretcher. */
+const MIN_SCHEDULE_LEAD = STRETCH_LEAD + 0.1;
 
 /** UI refresh and completion check; timers keep running while the window is hidden. */
 const MONITOR_INTERVAL_MS = 30;

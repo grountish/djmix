@@ -262,6 +262,10 @@ export function App() {
             />
 
             <Mixer
+              channelA={{ eq: state.deckA.eq, filter: state.deckA.filter }}
+              channelB={{ eq: state.deckB.eq, filter: state.deckB.filter }}
+              onEqChange={actions.setDeckEq}
+              onFilterChange={actions.setDeckFilter}
               crossfader={state.crossfader}
               masterVolume={state.masterVolume}
               volumeA={state.deckA.playback.volume}

@@ -1,6 +1,8 @@
 import type { AudioAnalysis } from '@/audio/analysis/types';
 
 export type { AudioAnalysis, Phrase, PhraseLabel } from '@/audio/analysis/types';
+export type { EqBand } from '@/audio/engine/mixGraph';
+import type { EqBand } from '@/audio/engine/mixGraph';
 
 export interface SpectralWaveform {
   low: number[];
@@ -46,6 +48,10 @@ export interface DeckState {
   playback: PlaybackState;
   targetBpm: number | null;
   playbackMode: PlaybackMode;
+  /** EQ knob positions: -1 kill, 0 unity, +1 = +6 dB. */
+  eq: Record<EqBand, number>;
+  /** Filter knob: -1 low-pass … 0 off … +1 high-pass. */
+  filter: number;
 }
 
 export type PlaybackMode = 'rate' | 'stretch';

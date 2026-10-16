@@ -67,12 +67,8 @@ export function Deck({
 
   const effectiveBpm = track?.analysis?.manualBpm || track?.analysis?.bpm;
 
-  // Calculate current playing BPM based on playback mode and rate
-  const currentBpm = effectiveBpm
-    ? playbackMode === 'stretch'
-      ? effectiveBpm // Stretch mode preserves tempo
-      : effectiveBpm * playback.playbackRate // Rate mode changes tempo with pitch
-    : null;
+  // Both modes change tempo; key lock only keeps the pitch
+  const currentBpm = effectiveBpm ? effectiveBpm * playback.playbackRate : null;
 
   const handleTargetBpmSubmit = () => {
     const bpm = parseFloat(targetBpmInput);
@@ -215,8 +211,9 @@ export function Deck({
           </button>
           <button
             className={`mode-button ${playbackMode === 'stretch' ? 'active' : ''}`}
-            onClick={() => onModeChange('stretch')}>
-            Stretch
+            onClick={() => onModeChange('stretch')}
+            title="Keep the key when the tempo changes">
+            Key Lock
           </button>
         </div>
       </div>

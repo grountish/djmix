@@ -2,14 +2,12 @@ import type { PlaybackMode } from '@/types';
 import { getAudioContext, decodeAudioFile } from './decoder';
 import { DeckPlayer } from './engine/deckPlayer';
 import { getMixGraph } from './engine/liveGraph';
+import { createStretchNode } from './engine/stretch';
 import type { DeckId, MixGraph } from './engine/mixGraph';
 import type { PlayheadAnchor } from './engine/transport';
 
 interface DeckEngine {
   player: DeckPlayer;
-  /** Tempo ratio requested by the UI; applied to the source only in rate mode. */
-  playbackRate: number;
-  playbackMode: PlaybackMode;
   onTimeUpdate?: (time: number) => void;
   onEnded?: () => void;
   animationFrameId?: number;
@@ -29,9 +27,7 @@ function getDeck(deckId: DeckId): DeckEngine {
 
 function createDeckEngine(graph: MixGraph, id: DeckId): DeckEngine {
   const deck: DeckEngine = {
-    player: new DeckPlayer(graph.ctx, graph.decks[id].input),
-    playbackRate: 1,
-    playbackMode: 'rate',
+    player: new DeckPlayer(graph.ctx, graph.decks[id].input, createStretchNode),
   };
   deck.player.onEnded = () => {
     stopTimeTracking(deck);
@@ -40,18 +36,14 @@ function createDeckEngine(graph: MixGraph, id: DeckId): DeckEngine {
   return deck;
 }
 
-function appliedRate(deck: DeckEngine): number {
-  return deck.playbackMode === 'rate' ? deck.playbackRate : 1;
-}
-
 export async function loadTrackToDeck(deckId: DeckId, filePath: string): Promise<void> {
   stopDeck(deckId);
-  getDeck(deckId).player.load(await decodeAudioFile(filePath));
+  await getDeck(deckId).player.load(await decodeAudioFile(filePath));
 }
 
-export function loadAudioBufferToDeck(deckId: DeckId, audioBuffer: AudioBuffer): void {
+export async function loadAudioBufferToDeck(deckId: DeckId, audioBuffer: AudioBuffer): Promise<void> {
   stopDeck(deckId);
-  getDeck(deckId).player.load(audioBuffer);
+  await getDeck(deckId).player.load(audioBuffer);
 }
 
 /** Starts the deck at audio-clock time `when` (default: now). */
@@ -86,15 +78,17 @@ export function seekDeck(deckId: DeckId, time: number): void {
 }
 
 export function setDeckPlaybackRate(deckId: DeckId, rate: number): void {
-  const deck = getDeck(deckId);
-  deck.playbackRate = rate;
-  deck.player.setRate(appliedRate(deck));
+  getDeck(deckId).player.setRate(rate);
 }
 
+/** 'stretch' keeps the key while the tempo changes (key lock); 'rate' works like vinyl. */
 export function setDeckPlaybackMode(deckId: DeckId, mode: PlaybackMode): void {
-  const deck = getDeck(deckId);
-  deck.playbackMode = mode;
-  deck.player.setRate(appliedRate(deck));
+  getDeck(deckId).player.setKeyLock(mode === 'stretch');
+}
+
+/** Pitch shift in semitones; applies while key lock is on. */
+export function setDeckSemitones(deckId: DeckId, semitones: number): void {
+  getDeck(deckId).player.setSemitones(semitones);
 }
 
 export function getDeckCurrentTime(deckId: DeckId): number {

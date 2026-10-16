@@ -1,4 +1,5 @@
 import { getAudioContext } from '../decoder';
+import { attachLimiter } from './limiter';
 import { createMixGraph, type MixGraph } from './mixGraph';
 
 let graph: MixGraph | null = null;
@@ -8,6 +9,7 @@ export function getMixGraph(): MixGraph {
   const ctx = getAudioContext();
   if (!graph || graph.ctx !== ctx) {
     graph = createMixGraph(ctx);
+    attachLimiter(graph).catch((error) => console.error('Master limiter unavailable:', error));
   }
   return graph;
 }

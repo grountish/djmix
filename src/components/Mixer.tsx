@@ -1,4 +1,50 @@
+import type { EqBand } from '@/types';
+
+type DeckId = 'A' | 'B';
+
+interface ChannelControls {
+  eq: Record<EqBand, number>;
+  filter: number;
+}
+
+const EQ_ROWS: { band: EqBand | 'filter'; label: string; title: string }[] = [
+  { band: 'high', label: 'Hi', title: 'High band (above 2.5 kHz)' },
+  { band: 'mid', label: 'Mid', title: 'Mid band (200 Hz – 2.5 kHz)' },
+  { band: 'low', label: 'Low', title: 'Low band (below 200 Hz)' },
+  { band: 'filter', label: 'Flt', title: 'Filter: left low-pass, right high-pass' },
+];
+
+function EqControl({
+  value,
+  title,
+  isFilter,
+  onChange,
+}: {
+  value: number;
+  title: string;
+  isFilter: boolean;
+  onChange: (value: number) => void;
+}) {
+  const state = value <= -1 && !isFilter ? 'killed' : value !== 0 ? 'moved' : '';
+  return (
+    <input
+      type="range"
+      className={`eq-slider ${state}`}
+      min="-100"
+      max="100"
+      value={Math.round(value * 100)}
+      title={`${title} (double-click to reset)`}
+      onChange={(e) => onChange(Number(e.target.value) / 100)}
+      onDoubleClick={() => onChange(0)}
+    />
+  );
+}
+
 interface MixerProps {
+  channelA: ChannelControls;
+  channelB: ChannelControls;
+  onEqChange: (deck: DeckId, band: EqBand, value: number) => void;
+  onFilterChange: (deck: DeckId, value: number) => void;
   crossfader: number;
   masterVolume: number;
   volumeA: number;
@@ -16,6 +62,10 @@ interface MixerProps {
 }
 
 export function Mixer({
+  channelA,
+  channelB,
+  onEqChange,
+  onFilterChange,
   crossfader,
   masterVolume,
   volumeA,
@@ -34,6 +84,34 @@ export function Mixer({
   return (
     <div className="mixer-section">
       <div className="mixer-header">Mixer</div>
+
+      <div className="eq-section">
+        {EQ_ROWS.map(({ band, label, title }) => {
+          const control = (deck: DeckId, channel: ChannelControls) =>
+            band === 'filter' ? (
+              <EqControl
+                value={channel.filter}
+                title={title}
+                isFilter
+                onChange={(value) => onFilterChange(deck, value)}
+              />
+            ) : (
+              <EqControl
+                value={channel.eq[band]}
+                title={title}
+                isFilter={false}
+                onChange={(value) => onEqChange(deck, band, value)}
+              />
+            );
+          return (
+            <div className="eq-row" key={band}>
+              {control('A', channelA)}
+              <span className="eq-label">{label}</span>
+              {control('B', channelB)}
+            </div>
+          );
+        })}
+      </div>
 
       <div className="channel-faders">
         <div className="channel-fader">

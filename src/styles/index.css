@@ -656,6 +656,55 @@ select {
         letter-spacing: 1px;
 }
 
+/* EQ / filter strip */
+.eq-section {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        width: 100%;
+}
+
+.eq-row {
+        display: grid;
+        grid-template-columns: 1fr auto 1fr;
+        align-items: center;
+        gap: 6px;
+}
+
+.eq-label {
+        font-size: 8px;
+        font-weight: 600;
+        color: var(--text-dim);
+        text-transform: uppercase;
+        width: 22px;
+        text-align: center;
+}
+
+.eq-slider {
+        width: 100%;
+        height: 4px;
+        -webkit-appearance: none;
+        background: var(--bg-primary);
+        border-radius: 0;
+}
+
+.eq-slider::-webkit-slider-thumb {
+        -webkit-appearance: none;
+        width: 8px;
+        height: 14px;
+        background: var(--text-secondary);
+        border-radius: 1px;
+        cursor: pointer;
+}
+
+.eq-slider.moved::-webkit-slider-thumb {
+        background: var(--accent);
+}
+
+.eq-slider.killed::-webkit-slider-thumb {
+        background: var(--error);
+}
+
 .channel-faders {
         display: flex;
         gap: 20px;

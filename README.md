@@ -29,7 +29,11 @@ A DJ-style track analysis and BPM-based mixing application built with Electron, 
 - **Tempo Sync**: Match a track's tempo to a target BPM
 - **Two Playback Modes**:
   - **Rate Mode**: Changes playback speed (affects both tempo and pitch)
-  - **Stretch Mode**: Attempts to preserve pitch while changing tempo
+  - **Key Lock**: Keeps the key while the tempo changes (Signalsmith Stretch), with optional semitone shift
+- **3-Band Isolator EQ**: Linkwitz-Riley crossovers at 200 Hz / 2.5 kHz, full kill per band, flat at unity
+- **DJ Filter**: One knob, low-pass to the left, high-pass to the right
+- **Auto Gain**: Each track is trimmed towards -11 LUFS from its measured loudness
+- **Master Limiter**: Lookahead brickwall limiter, -1.5 dBFS ceiling
 - **Crossfader**: Equal-power blend between Deck A and Deck B
 - **Volume Controls**: Per-deck volume and master volume
 - **Analysis Caching**: BPM results are cached locally to avoid recomputation
@@ -89,7 +93,7 @@ npm run dev
 | **React**                   | UI framework                                  |
 | **TypeScript**              | Type safety                                   |
 | **Vite**                    | Fast development bundler                      |
-| **SoundTouchJS**            | Time-stretching with pitch preservation       |
+| **Signalsmith Stretch**     | Key lock / pitch shift (WASM AudioWorklet)    |
 | **uuid**                    | Unique track identifiers                      |
 
 ## Architecture
@@ -103,7 +107,6 @@ src/
 │   ├── fileImporter.ts # File import & metadata
 │   ├── playbackEngine.ts # Deck playback control
 │   ├── mixingEngine.ts # Crossfader & mixing
-│   ├── stretchEngine.ts # Pitch-preserving stretch
 │   └── persistence.ts  # Analysis caching
 ├── components/         # React UI components
 │   ├── Deck.tsx        # Deck controls
@@ -126,11 +129,15 @@ src/
 - BPM is normalized to 85-175 range to handle double/half-time errors
 - Users can manually override detected BPM
 
-### Pitch-Preserving Stretch
+### Key Lock
 
-- Uses SoundTouchJS which provides basic time-stretching
-- Quality is acceptable but not studio-grade
-- Rate mode (pitch changes with tempo) is more reliable
+- Uses Signalsmith Stretch (phase vocoder, MIT): clean for ±10% tempo changes, slightly softer transients than Rate mode
+- Kicks stay within a fraction of a millisecond of the beat grid in both modes, so key-locked and vinyl-style decks mix tightly
+- Adds ~120 ms scheduling latency to key-locked seeks and starts (automix schedules ahead, so mixes stay sample-accurate)
+
+### EQ
+
+- The isolator's crossovers delay low frequencies by a few ms relative to highs (as in analog isolators); both decks share the same delay, so their alignment is unaffected
 
 ### Waveform
 
@@ -148,10 +155,10 @@ src/
 
 1. **Drifting Tempo Sync**: Drifting-tempo tracks are analysed, but deck sync still assumes a constant tempo
 2. **No Key Detection**: Musical key analysis not implemented
-3. **No Effects**: No EQ, filters, or audio effects
+3. **No Effects**: EQ and filter only (no delay, reverb or echo-out yet)
 4. **Crossfader Curve**: Equal-power only, no curve options
 5. **No Cue Points**: Cannot set/recall cue points
-6. **Stretch Quality**: Pitch-preserving stretch may have artifacts at extreme tempo changes
+6. **Stretch Quality**: Key lock may smear transients slightly at large tempo changes
 7. **Large Files**: Very long audio files may take time to decode and analyze
 
 ## Next Steps
@@ -161,7 +168,7 @@ src/
 - [ ] Add keyboard shortcuts for transport controls
 - [ ] Improve waveform with beat markers
 - [ ] Add cue point support
-- [ ] Implement EQ (low/mid/high) per deck
+- [x] Implement EQ (low/mid/high) per deck
 
 ### Medium Term
 

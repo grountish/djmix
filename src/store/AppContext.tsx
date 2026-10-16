@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useReducer, useCallback } from 'react';
-import type { Track, DeckState, PlaybackMode, SortOption, FilterOptions } from '@/types';
+import type { Track, DeckState, EqBand, PlaybackMode, SortOption, FilterOptions } from '@/types';
 import {
   loadTrackToDeck,
   loadAudioBufferToDeck,
@@ -7,7 +7,6 @@ import {
   seekDeck,
   setDeckTimeUpdateCallback,
   setDeckEndedCallback,
-  getDeckAudioBuffer,
   syncDeckToTargetBpm,
   setDeckPlaybackMode,
   setDeckPlaybackRate,
@@ -16,20 +15,14 @@ import {
   getDeckAnchor,
 } from '@/audio/playbackEngine';
 import { isElectronEnvironment } from '@/audio/fileImporter';
-import { setChannelFader, setCrossfader, setMasterVolume } from '@/audio/mixingEngine';
 import {
-  initStretchMode,
-  playStretchMode,
-  playStretchModeAt,
-  seekStretchMode,
-  setStretchTempo,
-  setStretchTimeUpdateCallback,
-  setStretchEndedCallback,
-  isStretchModeInitialized,
-  isStretchEnginePlaying,
-  forceStopStretchMode,
-  getStretchAnchor,
-} from '@/audio/stretchEngine';
+  setChannelFader,
+  setCrossfader,
+  setDeckAutoGain,
+  setDeckEq,
+  setDeckFilter,
+  setMasterVolume,
+} from '@/audio/mixingEngine';
 import { cancelTransition, triggerTransition } from '@/audio/automixController';
 
 interface AppState {
@@ -62,6 +55,8 @@ type Action =
   | { type: 'SET_DECK_TARGET_BPM'; deck: 'A' | 'B'; targetBpm: number | null }
   | { type: 'SET_DECK_MODE'; deck: 'A' | 'B'; mode: PlaybackMode }
   | { type: 'SET_DECK_VOLUME'; deck: 'A' | 'B'; volume: number }
+  | { type: 'SET_DECK_EQ'; deck: 'A' | 'B'; band: EqBand; value: number }
+  | { type: 'SET_DECK_FILTER'; deck: 'A' | 'B'; value: number }
   | { type: 'SET_CROSSFADER'; value: number }
   | { type: 'SET_MASTER_VOLUME'; volume: number }
   | { type: 'SET_REFERENCE_TRACK'; trackId: string | null }
@@ -81,6 +76,8 @@ const createInitialDeckState = (): DeckState => ({
   },
   targetBpm: null,
   playbackMode: 'rate',
+  eq: { low: 0, mid: 0, high: 0 },
+  filter: 0,
 });
 
 const initialState: AppState = {
@@ -206,6 +203,19 @@ function reducer(state: AppState, action: Action): AppState {
       };
     }
 
+    case 'SET_DECK_EQ': {
+      const deckKey = action.deck === 'A' ? 'deckA' : 'deckB';
+      return {
+        ...state,
+        [deckKey]: { ...state[deckKey], eq: { ...state[deckKey].eq, [action.band]: action.value } },
+      };
+    }
+
+    case 'SET_DECK_FILTER': {
+      const deckKey = action.deck === 'A' ? 'deckA' : 'deckB';
+      return { ...state, [deckKey]: { ...state[deckKey], filter: action.value } };
+    }
+
     case 'SET_CROSSFADER':
       return { ...state, crossfader: action.value };
 
@@ -258,6 +268,8 @@ interface AppContextValue {
     setDeckTargetBpm: (deck: 'A' | 'B', bpm: number | null) => void;
     setDeckMode: (deck: 'A' | 'B', mode: PlaybackMode) => void;
     setDeckVolume: (deck: 'A' | 'B', volume: number) => void;
+    setDeckEq: (deck: 'A' | 'B', band: EqBand, value: number) => void;
+    setDeckFilter: (deck: 'A' | 'B', value: number) => void;
     setDeckPitch: (deck: 'A' | 'B', rate: number) => void;
     setCrossfader: (value: number) => void;
     setMasterVolume: (volume: number) => void;
@@ -300,17 +312,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         if (isElectronEnvironment()) {
           await loadTrackToDeck(deck, track.filePath);
         } else if (track._audioBuffer) {
-          loadAudioBufferToDeck(deck, track._audioBuffer);
+          await loadAudioBufferToDeck(deck, track._audioBuffer);
         }
 
         // Reset playback rate to 1 when loading a new track
+        setDeckPlaybackRate(deck, 1);
+        setDeckAutoGain(deck, track.analysis?.loudness.integratedLufs);
         dispatch({ type: 'SET_DECK_PLAYBACK_RATE', deck, rate: 1 });
         dispatch({ type: 'SET_DECK_TRACK', deck, track });
-
-        const buffer = getDeckAudioBuffer(deck);
-        if (buffer && buffer instanceof AudioBuffer) {
-          initStretchMode(deck, buffer);
-        }
 
         setDeckTimeUpdateCallback(deck, (time) => {
           dispatch({ type: 'SET_DECK_TIME', deck, currentTime: time });
@@ -319,64 +328,24 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setDeckEndedCallback(deck, () => {
           dispatch({ type: 'SET_DECK_PLAYING', deck, isPlaying: false });
         });
-
-        setStretchTimeUpdateCallback(deck, (time) => {
-          dispatch({ type: 'SET_DECK_TIME', deck, currentTime: time });
-        });
-
-        setStretchEndedCallback(deck, () => {
-          dispatch({ type: 'SET_DECK_PLAYING', deck, isPlaying: false });
-        });
       },
       [],
     ),
 
-    playPauseDeck: useCallback(
-      (deck: 'A' | 'B') => {
-        const deckState = deck === 'A' ? state.deckA : state.deckB;
+    playPauseDeck: useCallback((deck: 'A' | 'B') => {
+      // Check ACTUAL engine state, not just React state
+      if (isDeckEnginePlaying(deck)) {
+        forceStopDeck(deck);
+        dispatch({ type: 'SET_DECK_PLAYING', deck, isPlaying: false });
+      } else if (playDeck(deck)) {
+        dispatch({ type: 'SET_DECK_PLAYING', deck, isPlaying: true });
+      }
+    }, []),
 
-        // Check ACTUAL engine state, not just React state
-        const rateEnginePlaying = isDeckEnginePlaying(deck);
-        const stretchEnginePlaying = isStretchEnginePlaying(deck);
-        const actuallyPlaying = rateEnginePlaying || stretchEnginePlaying;
-
-        // Use actual engine state to determine action
-        if (actuallyPlaying) {
-          // Stop ALL engines to ensure no double playback
-          forceStopDeck(deck);
-          forceStopStretchMode(deck);
-          dispatch({ type: 'SET_DECK_PLAYING', deck, isPlaying: false });
-        } else {
-          // Start the appropriate engine
-          let started = false;
-          if (deckState.playbackMode === 'stretch' && isStretchModeInitialized(deck)) {
-            playStretchMode(deck);
-            started = true;
-          } else {
-            started = playDeck(deck);
-          }
-          if (started) {
-            dispatch({ type: 'SET_DECK_PLAYING', deck, isPlaying: true });
-          }
-        }
-      },
-      [state.deckA.playbackMode, state.deckB.playbackMode],
-    ),
-
-    seekDeck: useCallback(
-      (deck: 'A' | 'B', time: number) => {
-        const deckState = deck === 'A' ? state.deckA : state.deckB;
-
-        if (deckState.playbackMode === 'stretch' && isStretchModeInitialized(deck)) {
-          seekStretchMode(deck, time);
-        } else {
-          seekDeck(deck, time);
-        }
-
-        dispatch({ type: 'SET_DECK_TIME', deck, currentTime: time });
-      },
-      [state.deckA.playbackMode, state.deckB.playbackMode],
-    ),
+    seekDeck: useCallback((deck: 'A' | 'B', time: number) => {
+      seekDeck(deck, time);
+      dispatch({ type: 'SET_DECK_TIME', deck, currentTime: time });
+    }, []),
 
     setDeckTargetBpm: useCallback((deck: 'A' | 'B', bpm: number | null) => {
       dispatch({ type: 'SET_DECK_TARGET_BPM', deck, targetBpm: bpm });
@@ -392,20 +361,20 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       dispatch({ type: 'SET_DECK_VOLUME', deck, volume });
     }, []),
 
-    setDeckPitch: useCallback(
-      (deck: 'A' | 'B', rate: number) => {
-        const deckState = deck === 'A' ? state.deckA : state.deckB;
+    setDeckEq: useCallback((deck: 'A' | 'B', band: EqBand, value: number) => {
+      setDeckEq(deck, band, value);
+      dispatch({ type: 'SET_DECK_EQ', deck, band, value });
+    }, []),
 
-        if (deckState.playbackMode === 'stretch' && isStretchModeInitialized(deck)) {
-          setStretchTempo(deck, rate);
-        } else {
-          setDeckPlaybackRate(deck, rate);
-        }
+    setDeckFilter: useCallback((deck: 'A' | 'B', value: number) => {
+      setDeckFilter(deck, value);
+      dispatch({ type: 'SET_DECK_FILTER', deck, value });
+    }, []),
 
-        dispatch({ type: 'SET_DECK_PLAYBACK_RATE', deck, rate });
-      },
-      [state.deckA.playbackMode, state.deckB.playbackMode],
-    ),
+    setDeckPitch: useCallback((deck: 'A' | 'B', rate: number) => {
+      setDeckPlaybackRate(deck, rate);
+      dispatch({ type: 'SET_DECK_PLAYBACK_RATE', deck, rate });
+    }, []),
 
     setCrossfader: useCallback((value: number) => {
       // Grabbing the crossfader takes over from a running automix transition
@@ -446,15 +415,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
         if (!targetBpm) return;
 
-        const ratio = targetBpm / sourceBpm;
-
-        if (deckState.playbackMode === 'stretch' && isStretchModeInitialized(deck)) {
-          setStretchTempo(deck, ratio);
-        } else {
-          syncDeckToTargetBpm(deck, sourceBpm, targetBpm);
-        }
-
-        dispatch({ type: 'SET_DECK_PLAYBACK_RATE', deck, rate: ratio });
+        syncDeckToTargetBpm(deck, sourceBpm, targetBpm);
+        dispatch({ type: 'SET_DECK_PLAYBACK_RATE', deck, rate: targetBpm / sourceBpm });
       },
       [state.deckA, state.deckB],
     ),
@@ -492,12 +454,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
       // Ensure source deck is playing before starting the mix
       if (!sourceDeckState.playback.isPlaying) {
-        // Start the source deck first
-        if (sourceDeckState.playbackMode === 'stretch' && isStretchModeInitialized(sourceDeckId)) {
-          playStretchMode(sourceDeckId);
-        } else {
-          playDeck(sourceDeckId);
-        }
+        playDeck(sourceDeckId);
         dispatch({ type: 'SET_DECK_PLAYING', deck: sourceDeckId, isPlaying: true });
       }
 
@@ -517,45 +474,21 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
             const sourceBpm = track.analysis.manualBpm || track.analysis.bpm;
             const targetBpm = otherTrack.analysis.manualBpm || otherTrack.analysis.bpm;
-            const ratio = targetBpm / sourceBpm;
-
-            if (dState.playbackMode === 'stretch' && isStretchModeInitialized(deck)) {
-              setStretchTempo(deck, ratio);
-            } else {
-              syncDeckToTargetBpm(deck, sourceBpm, targetBpm);
-            }
-
-            dispatch({ type: 'SET_DECK_PLAYBACK_RATE', deck, rate: ratio });
+            syncDeckToTargetBpm(deck, sourceBpm, targetBpm);
+            dispatch({ type: 'SET_DECK_PLAYBACK_RATE', deck, rate: targetBpm / sourceBpm });
           },
-          getAnchor: (deck: 'A' | 'B') => {
-            const dState = deck === 'A' ? state.deckA : state.deckB;
-            if (dState.playbackMode === 'stretch' && isStretchModeInitialized(deck)) {
-              return getStretchAnchor(deck);
-            }
-            return getDeckAnchor(deck);
-          },
+          getAnchor: getDeckAnchor,
           onStartPlay: (deck: 'A' | 'B', when: number) => {
-            const dState = deck === 'A' ? state.deckA : state.deckB;
-            if (dState.playbackMode === 'stretch' && isStretchModeInitialized(deck)) {
-              playStretchModeAt(deck, when);
-            } else {
-              playDeck(deck, when);
-            }
+            playDeck(deck, when);
             dispatch({ type: 'SET_DECK_PLAYING', deck, isPlaying: true });
           },
           onStopDeck: (deck: 'A' | 'B') => {
             // Pause the outgoing deck after the transition completes
             forceStopDeck(deck);
-            forceStopStretchMode(deck);
             dispatch({ type: 'SET_DECK_PLAYING', deck, isPlaying: false });
           },
           onSeek: (deck: 'A' | 'B', time: number) => {
-            const dState = deck === 'A' ? state.deckA : state.deckB;
-            if (dState.playbackMode === 'stretch' && isStretchModeInitialized(deck)) {
-              seekStretchMode(deck, time);
-            } else {
-              seekDeck(deck, time);
-            }
+            seekDeck(deck, time);
             dispatch({ type: 'SET_DECK_TIME', deck, currentTime: time });
           },
           onCrossfaderDisplay: (value: number) => {

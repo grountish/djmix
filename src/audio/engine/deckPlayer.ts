@@ -1,6 +1,15 @@
 import { clamp } from './curves';
+import type { StretchChange } from 'signalsmith-stretch';
+import {
+  PARKED_INPUT,
+  STRETCH_LEAD,
+  STRETCH_OUTPUT_DELAY,
+  type StretchFactory,
+  type StretchNode,
+} from './stretch';
 import {
   alignToRenderQuantum,
+  ctxTimeAt,
   type PlayheadAnchor,
   rebaseAnchor,
   SCHEDULE_LEAD,
@@ -10,21 +19,34 @@ import {
 /**
  * Plays an AudioBuffer into a persistent deck channel. The playhead is derived from anchors
  * on the audio clock, so it stays exact across rate changes and scheduled starts.
+ *
+ * Without key lock the buffer plays through an AudioBufferSourceNode (pitch follows tempo).
+ * With key lock it plays through a time-stretcher that keeps pitch, optionally shifted by
+ * whole semitones. Both paths follow the same anchors.
  */
 export class DeckPlayer {
   private buffer: AudioBuffer | null = null;
   private source: AudioBufferSourceNode | null = null;
+  private stretch: StretchNode | null = null;
+  private stretchRunning = false;
+  /** Loads run one after another so two quick loads can't mix their audio. */
+  private loading: Promise<void> = Promise.resolve();
+  private stretchMessages: Promise<unknown> = Promise.resolve();
   /** Playhead segments in clock order; each takes over at its `ctxTime`. */
   private anchors: PlayheadAnchor[] = [];
   private rate = 1;
+  private keyLock = false;
+  private semitones = 0;
   private pausedAt = 0;
   private playing = false;
+  private endTimer: ReturnType<typeof setTimeout> | null = null;
 
   onEnded?: () => void;
 
   constructor(
     private readonly ctx: BaseAudioContext,
     private readonly output: AudioNode,
+    private readonly createStretch?: StretchFactory,
   ) {}
 
   get audioBuffer(): AudioBuffer | null {
@@ -39,9 +61,31 @@ export class DeckPlayer {
     return this.playing;
   }
 
-  load(buffer: AudioBuffer): void {
-    this.stop();
-    this.buffer = buffer;
+  get isKeyLocked(): boolean {
+    return this.keyLock;
+  }
+
+  /** Loads a track; with a stretch factory the stretcher gets its own copy of the audio. */
+  load(buffer: AudioBuffer): Promise<void> {
+    this.loading = this.loading.then(async () => {
+      this.stop();
+      this.buffer = buffer;
+      if (!this.createStretch) return;
+
+      if (!this.stretch) {
+        this.stretch = await this.createStretch(this.ctx);
+        this.stretch.connect(this.output);
+      }
+      await this.stretch.dropBuffers();
+      const channels = [0, 1].map((c) =>
+        buffer.getChannelData(Math.min(c, buffer.numberOfChannels - 1)).slice(),
+      );
+      await this.stretch.addBuffers(
+        channels,
+        channels.map((channel) => channel.buffer),
+      );
+    });
+    return this.loading;
   }
 
   /**
@@ -50,7 +94,7 @@ export class DeckPlayer {
    */
   play(when?: number): boolean {
     if (!this.buffer || this.playing) return false;
-    this.startSource(when ?? this.nextChangeTime(), this.pausedAt);
+    this.startOutput(when ?? this.nextChangeTime(), this.pausedAt);
     this.playing = true;
     return true;
   }
@@ -59,7 +103,7 @@ export class DeckPlayer {
   pause(): void {
     if (!this.playing) return;
     this.pausedAt = this.currentTime();
-    this.releaseSource();
+    this.stopOutput();
     this.playing = false;
   }
 
@@ -74,31 +118,64 @@ export class DeckPlayer {
       this.pausedAt = target;
       return;
     }
-    // Hand over from the old source to the new one at the same instant: no gap.
+    // Hand over from the old output to the new one at the same instant: no gap.
     const at = this.nextChangeTime();
-    this.releaseSource(at);
-    this.startSource(at, target);
+    this.stopOutput(at);
+    this.startOutput(at, target);
   }
 
   setRate(rate: number): void {
     this.rate = rate;
-    if (!this.playing || !this.source) return;
+    if (!this.playing) return;
 
     const now = this.ctx.currentTime;
     const at = this.nextChangeTime();
-    while (this.anchors.length > 1 && this.anchors[1].ctxTime <= now) {
-      this.anchors.shift();
-    }
+    while (this.anchors.length > 1 && this.anchors[1].ctxTime <= now) this.anchors.shift();
     const last = this.anchors[this.anchors.length - 1];
     const rebased = rebaseAnchor(last, at, rate);
-    if (rebased.ctxTime === last.ctxTime) {
-      this.anchors[this.anchors.length - 1] = rebased;
-    } else {
-      this.anchors.push(rebased);
+    if (rebased.ctxTime === last.ctxTime) this.anchors[this.anchors.length - 1] = rebased;
+    else this.anchors.push(rebased);
+
+    if (this.keyLock) {
+      // While a start is pending this re-issues the start with the new rate.
+      this.scheduleStretch({ at: rebased.ctxTime, input: rebased.trackTime, rate });
+      this.watchEnd();
+    } else if (this.source) {
+      // playbackRate is k-rate: it is read at each block edge. An event exactly on the edge
+      // can round to just after it and slip a whole block, so place it half a frame early.
+      this.source.playbackRate.setValueAtTime(rate, at - 0.5 / this.ctx.sampleRate);
     }
-    // playbackRate is k-rate: it is read at each block edge. An event exactly on the edge can
-    // round to just after it and slip a whole block, so place it half a frame early.
-    this.source.playbackRate.setValueAtTime(rate, at - 0.5 / this.ctx.sampleRate);
+  }
+
+  /** Key lock keeps pitch while the tempo changes; needs a stretch factory. */
+  setKeyLock(enabled: boolean): void {
+    if (enabled === this.keyLock) return;
+    if (!this.playing) {
+      this.keyLock = enabled;
+      return;
+    }
+    if (enabled && !this.stretch) return;
+    const at = this.handoverTime(true);
+    const position = trackTimeAt(this.anchorAt(at), at);
+    this.stopOutput(at);
+    this.keyLock = enabled;
+    this.startOutput(at, position);
+  }
+
+  /** Pitch shift in semitones while key lock is on (e.g. ±1 for harmonic mixing). */
+  setSemitones(semitones: number): void {
+    this.semitones = semitones;
+    if (!this.playing || !this.keyLock) return;
+    const at = Math.max(this.handoverTime(false), this.anchors[0].ctxTime);
+    this.scheduleStretch({ at, input: trackTimeAt(this.anchorAt(at), at), rate: this.rate });
+  }
+
+  /**
+   * Resolves once the stretcher has received every change sent so far. Offline rendering
+   * can otherwise run past a change before the worklet sees it.
+   */
+  async settled(): Promise<void> {
+    await this.stretchMessages;
   }
 
   currentTime(): number {
@@ -113,7 +190,17 @@ export class DeckPlayer {
     return { ...this.anchors[this.anchors.length - 1] };
   }
 
-  private startSource(startAt: number, offset: number): void {
+  private startOutput(startAt: number, offset: number): void {
+    if (this.keyLock && this.stretch) {
+      // The stretcher needs its latency as lead time to start exactly.
+      const at = Math.max(startAt, this.ctx.currentTime + STRETCH_LEAD);
+      this.anchors = [{ ctxTime: at, trackTime: offset, rate: this.rate }];
+      this.scheduleStretch({ at, input: offset, rate: this.rate });
+      this.stretchRunning = true;
+      this.watchEnd();
+      return;
+    }
+
     const source = this.ctx.createBufferSource();
     source.buffer = this.buffer;
     source.playbackRate.value = this.rate;
@@ -121,29 +208,21 @@ export class DeckPlayer {
     source.onended = () => {
       if (this.source !== source) return;
       this.source = null;
-      this.playing = false;
-      this.pausedAt = 0;
-      this.onEnded?.();
+      this.finish();
     };
     source.start(startAt, offset);
-
     this.source = source;
     this.anchors = [{ ctxTime: startAt, trackTime: offset, rate: this.rate }];
   }
 
-  /** Latest segment in effect at `ctxTime`; the first one while a start is still pending. */
-  private anchorAt(ctxTime: number): PlayheadAnchor {
-    for (let i = this.anchors.length - 1; i > 0; i--) {
-      if (this.anchors[i].ctxTime <= ctxTime) return this.anchors[i];
+  /** Stops whichever output is running, now or at `at`. */
+  private stopOutput(at?: number): void {
+    this.clearEndTimer();
+    if (this.stretchRunning && this.stretch) {
+      this.parkStretch(at ?? this.ctx.currentTime);
+      this.stretchRunning = false;
     }
-    return this.anchors[0];
-  }
 
-  private nextChangeTime(): number {
-    return alignToRenderQuantum(this.ctx.currentTime + SCHEDULE_LEAD, this.ctx.sampleRate);
-  }
-
-  private releaseSource(at?: number): void {
     const source = this.source;
     if (!source) return;
     this.source = null;
@@ -158,5 +237,70 @@ export class DeckPlayer {
     } catch {
       // Already stopped
     }
+  }
+
+  private scheduleStretch({ at, input, rate }: { at: number; input: number; rate: number }): void {
+    this.scheduleStretchAt(at, { active: true, input, rate, semitones: this.semitones });
+  }
+
+  /** Silences the stretcher from `at` (see PARKED_INPUT). */
+  private parkStretch(at: number): void {
+    this.scheduleStretchAt(at, { active: true, input: PARKED_INPUT, rate: 0 });
+  }
+
+  /**
+   * The stretcher keeps a single pending change: each call replaces whatever was scheduled
+   * after now, so callers only ever schedule the next change.
+   */
+  private scheduleStretchAt(at: number, change: StretchChange): void {
+    if (!this.stretch) return;
+    this.stretchMessages = this.stretch.schedule({ ...change, output: at - STRETCH_OUTPUT_DELAY });
+  }
+
+  /**
+   * The stretcher plays silence past the end of the track rather than stopping (it can't
+   * hold a stop behind a pending change), so a timer reports the end and stops it.
+   */
+  private watchEnd(): void {
+    this.clearEndTimer();
+    // Timers only make sense on a live clock.
+    if (typeof AudioContext === 'undefined' || !(this.ctx instanceof AudioContext)) return;
+    const end = ctxTimeAt(this.anchors[this.anchors.length - 1], this.duration);
+    this.endTimer = setTimeout(() => this.finish(), Math.max(0, (end - this.ctx.currentTime) * 1000));
+  }
+
+  private finish(): void {
+    this.clearEndTimer();
+    if (this.stretchRunning) this.parkStretch(this.ctx.currentTime);
+    this.stretchRunning = false;
+    this.playing = false;
+    this.pausedAt = 0;
+    this.onEnded?.();
+  }
+
+  private clearEndTimer(): void {
+    if (this.endTimer !== null) {
+      clearTimeout(this.endTimer);
+      this.endTimer = null;
+    }
+  }
+
+  /** Latest segment in effect at `ctxTime`; the first one while a start is still pending. */
+  private anchorAt(ctxTime: number): PlayheadAnchor {
+    for (let i = this.anchors.length - 1; i > 0; i--) {
+      if (this.anchors[i].ctxTime <= ctxTime) return this.anchors[i];
+    }
+    return this.anchors[0];
+  }
+
+  private nextChangeTime(): number {
+    const lead = this.keyLock ? STRETCH_LEAD : SCHEDULE_LEAD;
+    return alignToRenderQuantum(this.ctx.currentTime + lead, this.ctx.sampleRate);
+  }
+
+  /** Time for a change that may involve the stretcher (switching to it, or re-pitching it). */
+  private handoverTime(involvesStretch: boolean): number {
+    const lead = involvesStretch || this.keyLock ? STRETCH_LEAD + SCHEDULE_LEAD : SCHEDULE_LEAD;
+    return alignToRenderQuantum(this.ctx.currentTime + lead, this.ctx.sampleRate);
   }
 }

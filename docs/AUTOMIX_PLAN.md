@@ -210,3 +210,22 @@ Carried forward:
 Open (needs the user's ears): downbeat choice on real tracks (no ground truth; confidence is low
 on minimal tracks), octave choice for 140–170 BPM readings (may be 70–85 BPM half-time), phrase
 labels on real arrangements. Deck sync for drifting tracks uses anchors in Phase 4.
+
+### Phase 2 — done (2026-10-16)
+
+- Key lock: `DeckPlayer` drives a per-deck Signalsmith Stretch worklet on the same audio-clock
+  anchors as the buffer path; ±semitone shift; key lock switchable mid-play with a seamless
+  handover. SoundTouch, the ScriptProcessor engine and the dual-engine branches in AppContext
+  are gone.
+- Measured: stretched kicks land 1.2–1.8 ms after the stretcher's own schedule (compensated
+  1.5 ms); in Chrome both paths sit within 0.2 ms of the anchors and of each other.
+- Signalsmith quirks handled: it keeps only one pending change (each `schedule()` replaces later
+  ones), and its inactive state crashes without an input, so idle decks are "parked" (playing
+  silence) instead of stopped; offline renders call `settled()` before rendering on.
+- Mix graph per deck: trim (auto-gain to -11 LUFS, -12…+6 dB) → LR4 3-band isolator
+  (200 Hz / 2.5 kHz, flat to 0.00 dB, low kill -66 dB @30 Hz / -42 dB @60 Hz) → DJ filter →
+  fader → crossfader → master → lookahead limiter (5 ms, ceiling -1.5 dBFS sample peak).
+- UI: HI/MID/LOW + FLT per channel (double-click resets), Key Lock button, playing BPM shown
+  for both modes.
+- Tests: 36 (key-lock timing via the analyzer, mid-play switch without gap or slip, pitch within
+  10 cents, isolator response, knob mappings, limiter ceiling/transparency/release).
