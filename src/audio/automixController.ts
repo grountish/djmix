@@ -1,4 +1,4 @@
-import type { TrackAnalysis } from '@/types';
+import type { AudioAnalysis } from './analysis/types';
 import { getMixGraph } from './engine/liveGraph';
 import type { DeckId } from './engine/mixGraph';
 import { planTransition, type TransitionPlan } from './mix/planner';
@@ -18,20 +18,16 @@ const DISPATCH_INTERVAL_MS = 30;
 
 let active: { runner: TransitionRunner; timer: ReturnType<typeof setInterval> } | null = null;
 
-/** Tempo the analysis is read at: a manual BPM correction wins. */
-function readBpm(analysis: TrackAnalysis): number {
-  return analysis.manualBpm ?? analysis.bpm;
-}
-
 /**
  * Plans and starts a transition from the playing `outgoingId` deck into the other deck: tempo
  * meeting point, phrase-aligned mix points, key shift and EQ blend, all on the audio clock.
- * Returns the plan, or null when the decks aren't ready.
+ * Pass the analyses with the user's corrections applied. Returns the plan, or null when the
+ * decks aren't ready.
  */
 export function startAutomixTransition(
   outgoingId: DeckId,
-  outgoing: TrackAnalysis,
-  incoming: TrackAnalysis,
+  outgoing: AudioAnalysis,
+  incoming: AudioAnalysis,
   callbacks: AutomixCallbacks,
 ): TransitionPlan | null {
   cancelTransition();
@@ -43,20 +39,19 @@ export function startAutomixTransition(
   const plan = planTransition({
     outgoing: {
       analysis: outgoing,
-      bpm: readBpm(outgoing),
       trackTime: outgoingPlayer.currentTime(),
       rate: outgoingPlayer.currentRate,
       semitones: outgoingPlayer.keyShift,
     },
-    incoming: { analysis: incoming, bpm: readBpm(incoming) },
+    incoming: { analysis: incoming },
   });
 
   const graph = getMixGraph();
   const runner = new TransitionRunner(
     graph.ctx,
     graph,
-    { id: outgoingId, player: outgoingPlayer, clock: trackClock(outgoing, readBpm(outgoing)) },
-    { id: incomingId, player: incomingPlayer, clock: trackClock(incoming, readBpm(incoming)) },
+    { id: outgoingId, player: outgoingPlayer, clock: trackClock(outgoing) },
+    { id: incomingId, player: incomingPlayer, clock: trackClock(incoming) },
     plan,
     {
       onOutgoingStopped: callbacks.onOutgoingStopped,

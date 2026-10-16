@@ -26,6 +26,7 @@ const SAMPLE_RATE = 44100;
 /** Bars of the outgoing track played before its tempo ramp starts. */
 const RUN_IN_BARS = 8;
 const TAIL_SECONDS = 8;
+const TARGET_LUFS = -11;
 
 async function load(file: string): Promise<{ buffer: AudioBuffer; analysis: AudioAnalysis }> {
   const data = readFileSync(file);
@@ -106,6 +107,11 @@ async function main(): Promise<void> {
 
   await mix.decks.A.load(outgoing.buffer);
   await mix.decks.B.load(incoming.buffer);
+  // Same loudness trim the app applies on load.
+  for (const [id, track] of [['A', outgoing], ['B', incoming]] as const) {
+    const trimDb = Math.max(-12, Math.min(6, TARGET_LUFS - track.analysis.loudness.integratedLufs));
+    mix.graph.decks[id].input.gain.value = Math.pow(10, trimDb / 20);
+  }
   mix.decks.A.setKeyLock(true);
   mix.decks.A.seek(startTrackTime);
   mix.decks.A.play(0);
@@ -141,6 +147,7 @@ async function main(): Promise<void> {
     report.beatAlignmentMs = {
       beats: metrics.alignment.summary.count,
       mean: +metrics.alignment.summary.meanMs.toFixed(2),
+      median: +metrics.alignment.summary.medianMs.toFixed(2),
       p95: +metrics.alignment.summary.p95AbsMs.toFixed(2),
       max: +metrics.alignment.summary.maxAbsMs.toFixed(2),
     };

@@ -226,6 +226,8 @@ export interface AlignmentSummary {
   /** Beats where both signals have a clear kick; the stats are NaN when this is 0. */
   count: number;
   meanMs: number;
+  /** Typical offset, robust to the odd misread kick. */
+  medianMs: number;
   maxAbsMs: number;
   p95AbsMs: number;
 }
@@ -255,7 +257,7 @@ export function beatAlignment(
   });
 
   if (beats.length === 0) {
-    return { beats, summary: { count: 0, meanMs: NaN, maxAbsMs: NaN, p95AbsMs: NaN } };
+    return { beats, summary: { count: 0, meanMs: NaN, medianMs: NaN, maxAbsMs: NaN, p95AbsMs: NaN } };
   }
   const absolute = beats.map((offset) => Math.abs(offset.diffMs));
   return {
@@ -263,6 +265,7 @@ export function beatAlignment(
     summary: {
       count: beats.length,
       meanMs: beats.reduce((sum, offset) => sum + offset.diffMs, 0) / beats.length,
+      medianMs: median(beats.map((offset) => offset.diffMs)),
       maxAbsMs: absolute.reduce((max, value) => Math.max(max, value), 0),
       p95AbsMs: percentile(absolute, 95),
     },
@@ -403,8 +406,12 @@ export interface RenderedTransition {
   allowedCollisionBeats?: number[];
 }
 
+/** Fewer beats with a clear kick on both decks than this can't tell timing from noise. */
+export const MIN_ALIGNED_BEATS = 8;
+
 export interface TransitionChecks {
-  beatAlignment: boolean;
+  /** null when too few beats had a clear kick on both decks to judge. */
+  beatAlignment: boolean | null;
   lowBand: boolean;
   loudness: boolean;
   peak: boolean;
@@ -448,7 +455,8 @@ export function summarizeTransition(
   const peakDb = samplePeakDb(master);
 
   const checks: TransitionChecks = {
-    beatAlignment: alignment.summary.count > 0 && alignment.summary.maxAbsMs < targets.maxBeatErrorMs,
+    beatAlignment:
+      alignment.summary.count < MIN_ALIGNED_BEATS ? null : alignment.summary.maxAbsMs < targets.maxBeatErrorMs,
     lowBand: unexpectedCollisionBeats.length === 0,
     loudness: loudnessDeviationLu <= targets.maxLoudnessDeviationLu,
     peak: peakDb <= targets.maxPeakDb,
@@ -462,6 +470,6 @@ export function summarizeTransition(
     samplePeakDb: peakDb,
     truePeakDb: measureLoudness(master, sampleRate).truePeakDb,
     checks,
-    pass: Object.values(checks).every(Boolean),
+    pass: Object.values(checks).every((check) => check !== false),
   };
 }

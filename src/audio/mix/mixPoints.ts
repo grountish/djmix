@@ -46,11 +46,16 @@ export function firstDropBar(phrases: Phrase[]): number {
   return phrases.find((p) => p.label === 'drop')?.startBar ?? 0;
 }
 
+/** Without at least this much intro, the incoming track starts in its main section: keep it short. */
+const MIN_INTRO_FOR_LONG_BLEND = 8;
+const SHORT_BLEND_BARS = 16;
+
 /**
  * Where to mix. Both tracks change on their phrase grids at the same moment: the overlap ends
- * where the outgoing track runs out, as late as possible, and the incoming intro is placed so
- * its first drop lands right as the overlap ends. Longer overlaps are preferred when the intro
- * is long enough and there is time to reach them.
+ * where the outgoing track runs out, as late as possible. The incoming intro is placed so its
+ * first drop lands at the end of the overlap; when the intro is shorter than the overlap the
+ * incoming track starts from its top and the basslines swap on its drop, so it hits with its
+ * bass as the outgoing bass leaves.
  */
 export function chooseMixPoints(input: MixPointInput): MixPoints {
   const { outgoing, incoming } = input;
@@ -58,11 +63,10 @@ export function chooseMixPoints(input: MixPointInput): MixPoints {
   const originIn = phraseOrigin(incoming.phrases);
   const intro = firstDropBar(incoming.phrases);
   const earliest = Math.ceil(outgoing.currentBar + input.leadBars);
+  const longest = intro >= MIN_INTRO_FOR_LONG_BLEND ? input.maxOverlapBars : Math.min(input.maxOverlapBars, SHORT_BLEND_BARS);
 
   for (const overlap of OVERLAP_CHOICES) {
-    if (overlap > input.maxOverlapBars) continue;
-    // Long overlaps need an intro to play over; an intro-less track still gets 8 bars.
-    if (overlap > Math.max(intro, PHRASE_BARS)) continue;
+    if (overlap > longest) continue;
 
     let start = outgoing.barCount - overlap;
     while (start >= earliest && !onGrid(start, originOut)) start--;
@@ -75,7 +79,7 @@ export function chooseMixPoints(input: MixPointInput): MixPoints {
       overlapBars: overlap,
       outgoingStartBar: start,
       incomingStartBar: incomingStart,
-      bassSwapBar: overlap / 2,
+      bassSwapBar: bassSwapBar(overlap, intro - incomingStart),
     };
   }
 
@@ -89,4 +93,14 @@ export function chooseMixPoints(input: MixPointInput): MixPoints {
     if (cut >= outgoing.barCount) cut = Math.min(Math.max(earliest, 0), Math.max(0, outgoing.barCount - 1));
   }
   return { overlapBars: 0, outgoingStartBar: cut, incomingStartBar: intro, bassSwapBar: 0 };
+}
+
+/**
+ * Overlap bar of the bass swap: on the incoming drop when it falls well inside the overlap,
+ * otherwise halfway. Never in the first or last quarter, so the blend has room either side.
+ */
+function bassSwapBar(overlap: number, dropInOverlap: number): number {
+  const margin = overlap / 4;
+  if (dropInOverlap >= margin && dropInOverlap <= overlap - margin) return dropInOverlap;
+  return overlap / 2;
 }

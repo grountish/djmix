@@ -485,7 +485,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       const targetDeckId: 'A' | 'B' = sourceDeckId === 'A' ? 'B' : 'A';
       const source = sourceDeckId === 'A' ? state.deckA : state.deckB;
       const target = targetDeckId === 'A' ? state.deckA : state.deckB;
-      if (!source.track?.analysis || !target.track?.analysis) {
+      const sourceAnalysis = source.track && effectiveAnalysis(source.track);
+      const targetAnalysis = target.track && effectiveAnalysis(target.track);
+      if (!source.track || !sourceAnalysis || !targetAnalysis) {
         dispatch({ type: 'SET_AUTOMIX_STATUS', status: 'Mix: both decks need an analysed track' });
         return;
       }
@@ -495,7 +497,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         dispatch({ type: 'SET_DECK_PLAYING', deck: sourceDeckId, isPlaying: true });
       }
 
-      const plan = startAutomixTransition(sourceDeckId, source.track.analysis, target.track.analysis, {
+      const sourceTrackId = source.track.id;
+      const plan = startAutomixTransition(sourceDeckId, sourceAnalysis, targetAnalysis, {
         onOutgoingStopped: () => {
           dispatch({ type: 'SET_DECK_PLAYING', deck: sourceDeckId, isPlaying: false });
           dispatch({ type: 'SET_DECK_VOLUME', deck: sourceDeckId, volume: 1 });
@@ -507,7 +510,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         onFinished: () => {
           dispatch({ type: 'SET_AUTOMIX_TRANSITIONING', isTransitioning: false });
           dispatch({ type: 'SET_AUTOMIX_ACTIVE_DECK', deck: targetDeckId });
-          dispatch({ type: 'MARK_PLAYED', trackId: source.track!.id });
+          dispatch({ type: 'MARK_PLAYED', trackId: sourceTrackId });
         },
         onTick: (rates) => {
           dispatch({ type: 'SET_DECK_PLAYBACK_RATE', deck: 'A', rate: rates.A });
@@ -559,7 +562,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       const unanalysed = state.queue.filter((id) => !byId.get(id)?.analysis);
       const startId = playing?.analysis && !ids.includes(playing.id) ? playing.id : undefined;
       const candidates = [...(startId ? [startId] : []), ...ids].map((id) =>
-        sequencerTrackFromAnalysis(id, byId.get(id)!.analysis!),
+        sequencerTrackFromAnalysis(id, effectiveAnalysis(byId.get(id)!)!),
       );
       const order = orderSet(candidates, { startId, direction: state.automix.direction });
       const ordered = order.tracks.map((t) => t.id).filter((id) => id !== startId);

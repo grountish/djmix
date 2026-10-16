@@ -40,6 +40,13 @@ const MIN_WINDOW_PUNCH = 1.5;
 const REFINE_SEARCH = 0.03;
 const MIN_OUTLIER_LIMIT = 0.004;
 const CONSTANT_TEMPO_MAX_RESIDUAL_MS = 3;
+/**
+ * Kicks this far off the straight grid in consecutive windows are a real local shift (an edit,
+ * a re-recorded section), not noise: the robust fit would drop them as outliers, so they are
+ * checked separately and turn the grid into measured anchors.
+ */
+const LOCAL_SHIFT_MS = 4;
+const LOCAL_SHIFT_WINDOWS = 2;
 
 interface WindowMeasurement {
   /** Centre beat index. */
@@ -95,7 +102,8 @@ export function fitBeatGrid(
 
   const accepted = fit?.accepted ?? [];
   const residualMs = fit ? fit.rmsResidual * 1000 : 0;
-  const isConstant = residualMs <= CONSTANT_TEMPO_MAX_RESIDUAL_MS;
+  const isConstant =
+    residualMs <= CONSTANT_TEMPO_MAX_RESIDUAL_MS && (!fit || !hasLocalShift(windows, fit));
   const coverage = windows.length ? accepted.length / windows.length : 0;
 
   return {
@@ -335,6 +343,18 @@ function measureGridWindows(
     windows.push({ beat: first + (WINDOW_BEATS - 1) / 2, offset, weight });
   }
   return windows;
+}
+
+/** True when consecutive measured windows sit off the fitted line by more than LOCAL_SHIFT_MS. */
+function hasLocalShift(windows: WindowMeasurement[], fit: LineFit): boolean {
+  let run = 0;
+  for (const w of windows) {
+    if (w.weight === 0) continue;
+    const residual = w.offset - (fit.intercept + fit.slope * (w.beat - fit.beatMean));
+    run = Math.abs(residual) * 1000 > LOCAL_SHIFT_MS ? run + 1 : 0;
+    if (run >= LOCAL_SHIFT_WINDOWS) return true;
+  }
+  return false;
 }
 
 interface LineFit {

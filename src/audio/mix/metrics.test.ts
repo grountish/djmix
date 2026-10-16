@@ -59,7 +59,7 @@ describe('beatAlignment', () => {
   it('reads identical signals as aligned', () => {
     const a = kickTrack(0.5, [{ bars: 8, kick: true, hats: true, bass: true }]);
     const { summary } = beatAlignment(a, a.slice(), SAMPLE_RATE, beats);
-    expect(summary).toEqual({ count: 32, meanMs: 0, maxAbsMs: 0, p95AbsMs: 0 });
+    expect(summary).toEqual({ count: 32, meanMs: 0, medianMs: 0, maxAbsMs: 0, p95AbsMs: 0 });
   });
 
   it('ignores content above the kick band', () => {

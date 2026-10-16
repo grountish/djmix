@@ -22,30 +22,32 @@ const BASS_SWAP_BARS = 1 / 16;
 const OUTRO_HIGHPASS = 0.55;
 
 /**
- * Long EQ blend. Incoming highs and mids are eased in first; the basslines swap in one
- * quarter beat right before a downbeat, so exactly one deck owns the low end at any time;
- * then the outgoing mids and highs give way and its remainder is filtered and faded out.
- * On a key clash the incoming mids stay out until the swap.
+ * EQ blend around the bass swap. Incoming highs and mids are eased in first; the basslines
+ * swap in one quarter beat right before the swap downbeat, so exactly one deck owns the low
+ * end at any time; then the outgoing mids and highs give way and its remainder is filtered
+ * and faded out. On a key clash the incoming mids stay out until the swap.
  */
 export function blendTemplate(overlapBars: number, bassSwapBar: number, keyClash: boolean): Lane[] {
-  const q = overlapBars / 4;
+  const length = overlapBars;
   const swap = bassSwapBar;
+  const after = length - swap;
+  const fadeIn = Math.min(length / 4, swap / 2);
   const incomingMid = keyClash
     ? [
         { bar: 0, value: KILL },
         { bar: swap - BASS_SWAP_BARS, value: KILL },
-        { bar: swap + q / 2, value: 0 },
+        { bar: swap + after / 2, value: 0 },
       ]
     : [
         { bar: 0, value: -12 },
-        { bar: q, value: -12 },
-        { bar: 2 * q, value: -6 },
-        { bar: 3 * q, value: 0 },
+        { bar: swap / 2, value: -12 },
+        { bar: swap, value: -6 },
+        { bar: swap + after / 2, value: 0 },
       ];
 
   return [
-    { target: 'incoming', control: 'fader', shape: 'rise', points: [{ bar: 0, value: 0 }, { bar: q, value: 1 }] },
-    { target: 'incoming', control: 'high', shape: 'linear', points: [{ bar: 0, value: -6 }, { bar: q, value: 0 }] },
+    { target: 'incoming', control: 'fader', shape: 'rise', points: [{ bar: 0, value: 0 }, { bar: fadeIn, value: 1 }] },
+    { target: 'incoming', control: 'high', shape: 'linear', points: [{ bar: 0, value: -6 }, { bar: length / 4, value: 0 }] },
     { target: 'incoming', control: 'mid', shape: 'linear', points: incomingMid },
     {
       target: 'incoming',
@@ -66,15 +68,30 @@ export function blendTemplate(overlapBars: number, bassSwapBar: number, keyClash
         { bar: swap, value: KILL },
       ],
     },
-    { target: 'outgoing', control: 'high', shape: 'linear', points: [{ bar: q, value: 0 }, { bar: 2 * q, value: -9 }] },
-    { target: 'outgoing', control: 'mid', shape: 'linear', points: [{ bar: 2 * q, value: 0 }, { bar: 3 * q, value: -12 }] },
+    {
+      target: 'outgoing',
+      control: 'high',
+      shape: 'linear',
+      points: [{ bar: swap / 2, value: 0 }, { bar: swap + after / 2, value: -9 }],
+    },
+    {
+      target: 'outgoing',
+      control: 'mid',
+      shape: 'linear',
+      points: [{ bar: swap, value: 0 }, { bar: swap + (3 * after) / 4, value: -12 }],
+    },
     {
       target: 'outgoing',
       control: 'filter',
       shape: 'linear',
-      points: [{ bar: 3 * q, value: 0 }, { bar: overlapBars, value: OUTRO_HIGHPASS }],
+      points: [{ bar: swap + after / 2, value: 0 }, { bar: length, value: OUTRO_HIGHPASS }],
     },
-    { target: 'outgoing', control: 'fader', shape: 'fall', points: [{ bar: 3 * q, value: 1 }, { bar: overlapBars, value: 0 }] },
+    {
+      target: 'outgoing',
+      control: 'fader',
+      shape: 'fall',
+      points: [{ bar: length - after / 2, value: 1 }, { bar: length, value: 0 }],
+    },
   ];
 }
 
