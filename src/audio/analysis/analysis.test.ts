@@ -79,6 +79,46 @@ describe('track analysis', () => {
     });
     expect(analysis.phrases.map((p) => p.startBar)).toEqual([0, 16, 48, 72, 120]);
   });
+
+  it('follows a locally shifted section without miscounting beats', () => {
+    // A steady track whose bars 48–80 sit 8 ms late (an edit), then back on the grid.
+    const bpm = 123;
+    const track = synthesizeTrack({ bpm, firstDownbeat: 0.25, sections: HOUSE_ARRANGEMENT });
+    const shift = Math.round(0.008 * track.sampleRate);
+    const cut = (beat: number) => Math.round((track.beatTimes[beat] - 0.1) * track.sampleRate);
+    const [from, to] = [cut(48 * 4), cut(80 * 4)];
+    const channels = track.channels.map((c) => {
+      const out = new Float32Array(c.length);
+      out.set(c.subarray(0, from));
+      out.set(c.subarray(from, to - shift), from + shift);
+      out.set(c.subarray(to), to);
+      return out;
+    });
+    const shifted = (beat: number) => beat >= 48 * 4 && beat < 80 * 4;
+    const truth = track.beatTimes.map((time, beat) => time + (shifted(beat) ? shift / track.sampleRate : 0));
+
+    const analysis = analyzeAudio(channels, track.sampleRate);
+    expect(analysis.bpm).toBeCloseTo(bpm, 2);
+    expect(analysis.tempo.isConstant).toBe(false);
+    const clock = anchoredClock(analysis.tempo.anchors!, 60 / analysis.bpm);
+    // Beat 0 is the first downbeat, which is the first true beat. Every kick away from the edit
+    // points (bars 72–80 are shifted and have kicks) sits within 2 ms of the truth.
+    const kickBars = new Set<number>();
+    HOUSE_ARRANGEMENT.reduce((bar, section) => {
+      if (section.kick) for (let b = bar; b < bar + section.bars; b++) kickBars.add(b);
+      return bar + section.bars;
+    }, 0);
+    truth.forEach((time, beat) => {
+      const nearEdit = Math.min(Math.abs(beat - 72 * 4), Math.abs(beat - 80 * 4)) <= 8;
+      if (kickBars.has(Math.floor(beat / 4)) && !nearEdit) {
+        expect(Math.abs(clock.timeOf(beat) - time)).toBeLessThan(0.002);
+      }
+    });
+    // The local tempo never strays: no phantom tempo from miscounted beats.
+    for (let beat = 0; beat < truth.length - 1; beat++) {
+      expect(Math.abs((clock.timeOf(beat + 1) - clock.timeOf(beat)) * (bpm / 60) - 1)).toBeLessThan(0.01);
+    }
+  });
 });
 
 describe('measureLoudness', () => {

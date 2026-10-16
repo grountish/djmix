@@ -1,4 +1,4 @@
-import { anchoredClock } from './beatClock';
+import { anchoredClock, type BeatClock, constantClock } from './beatClock';
 import { BUTTERWORTH4_Q, filtfilt, lowpass, median, parabolicOffset } from './dsp';
 import type { SpectralFeatures } from './spectrum';
 import type { GridAnchor } from './types';
@@ -47,6 +47,14 @@ const CONSTANT_TEMPO_MAX_RESIDUAL_MS = 3;
  */
 const LOCAL_SHIFT_MS = 4;
 const LOCAL_SHIFT_WINDOWS = 2;
+/**
+ * Kicks this far off a clock score nothing in its alignment check; nearer ones score in
+ * proportion. Anchors replace the straight grid only when they align the kicks better.
+ */
+const ALIGNMENT_TOLERANCE = 0.01;
+const ALIGNMENT_MARGIN = 0.05;
+/** Shift measurements are median-filtered over this many windows: a lone spike is noise. */
+const SHIFT_MEDIAN_WINDOWS = 5;
 
 interface WindowMeasurement {
   /** Centre beat index. */
@@ -102,19 +110,80 @@ export function fitBeatGrid(
 
   const accepted = fit?.accepted ?? [];
   const residualMs = fit ? fit.rmsResidual * 1000 : 0;
-  const isConstant =
-    residualMs <= CONSTANT_TEMPO_MAX_RESIDUAL_MS && (!fit || !hasLocalShift(windows, fit));
   const coverage = windows.length ? accepted.length / windows.length : 0;
+  const steady = residualMs <= CONSTANT_TEMPO_MAX_RESIDUAL_MS;
 
-  return {
-    bpm,
-    period,
-    beatTime,
-    isConstant,
-    residualMs,
-    coverage,
-    anchors: isConstant ? undefined : trackAnchors(envelope, beatTime, period, lastBeat()),
-  };
+  let anchors: GridAnchor[] | undefined;
+  if (fit && (!steady || hasLocalShift(windows, fit))) {
+    // A steady tempo with local shifts only needs small measured offsets; a drifting one is
+    // tracked. Either way the anchors must line the kicks up better than the straight grid.
+    const candidate = steady
+      ? shiftAnchors(envelope, beatTime, period, lastBeat())
+      : trackAnchors(envelope, beatTime, period, lastBeat());
+    if (candidate.length >= 2) {
+      const straight = alignmentScore(envelope, constantClock(beatTime, period), period, lastBeat());
+      const anchored = alignmentScore(envelope, anchoredClock(candidate, period), period, lastBeat());
+      if (anchored > straight + ALIGNMENT_MARGIN) anchors = candidate;
+    }
+  }
+
+  return { bpm, period, beatTime, isConstant: !anchors, residualMs, coverage, anchors };
+}
+
+/**
+ * Anchors for a steady tempo with local shifts: each window's kick attack measured against the
+ * straight grid (never more than an eighth of a beat from it), median-filtered so only shifts
+ * that last are kept. The attack, not the kick's shape, is what has to line up, and sections
+ * often use different kicks. Anchors at the first and last beat carry the nearest measurement,
+ * so the clock never extrapolates a noisy end slope.
+ */
+function shiftAnchors(envelope: KickEnvelope, beatTime: number, period: number, lastBeat: number): GridAnchor[] {
+  const template = averageKick(envelope, gridBeats(beatTime, period, 0, lastBeat), period);
+  const measured: { beat: number; offset: number }[] = [];
+  for (let first = 0; first + ANCHOR_WINDOW_BEATS - 1 <= lastBeat; first += ANCHOR_HOP_BEATS) {
+    const predicted = gridBeats(beatTime, period, first, first + ANCHOR_WINDOW_BEATS - 1);
+    const attack = windowAttack(envelope, template, predicted, period);
+    if (attack !== null) measured.push({ beat: first + (ANCHOR_WINDOW_BEATS - 1) / 2, offset: attack });
+  }
+  if (measured.length < 2) return [];
+
+  const reach = (SHIFT_MEDIAN_WINDOWS - 1) / 2;
+  const offsets = measured.map((_, i) =>
+    median(measured.slice(Math.max(0, i - reach), i + reach + 1).map((m) => m.offset)),
+  );
+  const at = (beat: number, offset: number) => ({ beat, time: beatTime + beat * period + offset });
+  return [
+    at(0, offsets[0]),
+    ...measured.map((m, i) => at(m.beat, offsets[i])),
+    at(lastBeat, offsets[offsets.length - 1]),
+  ].filter((a, i, all) => i === 0 || a.beat > all[i - 1].beat);
+}
+
+/**
+ * How well a clock lines up the kicks: per window, 1 when the window's kick attack sits on the
+ * clock's beats, falling to 0 at ALIGNMENT_TOLERANCE off (or without a clear kick). Mean over
+ * all windows, so stretches where the clock loses count weigh against it.
+ */
+function alignmentScore(envelope: KickEnvelope, clock: BeatClock, period: number, lastBeat: number): number {
+  const beats = Array.from({ length: lastBeat + 1 }, (_, k) => clock.timeOf(k));
+  const template = averageKick(envelope, beats, period);
+  let total = 0;
+  let count = 0;
+  for (let first = 0; first + WINDOW_BEATS - 1 <= lastBeat; first += WINDOW_HOP_BEATS) {
+    const attack = windowAttack(envelope, template, beats.slice(first, first + WINDOW_BEATS), period);
+    if (attack !== null) total += Math.max(0, 1 - Math.abs(attack) / ALIGNMENT_TOLERANCE);
+    count++;
+  }
+  return count ? total / count : 0;
+}
+
+/**
+ * Kick attack of a window's beats (see kickAttack), or null when the window doesn't hold the
+ * track's kick: it must correlate with the average kick, or chord and hat onsets would pass.
+ */
+function windowAttack(envelope: KickEnvelope, template: Float64Array, beats: number[], period: number): number | null {
+  if (measureWindow(envelope, template, beats, REFINE_SEARCH).weight === 0) return null;
+  return kickAttack(averageKick(envelope, beats, period));
 }
 
 /** Normalised kick flux plus a little broadband flux, for tracks with soft kicks. */
@@ -252,22 +321,31 @@ function gridBeats(beatTime: number, period: number, from: number, to: number): 
 
 /** Where the average kick crosses halfway from its floor to its peak, relative to the beat. */
 function kickOnset(template: Float64Array): number {
-  const half = (template.length - 1) / 2;
+  return kickAttack(template) ?? 0;
+}
+
+/**
+ * Attack of an averaged kick (±half a beat around its beats): where it crosses halfway from
+ * its floor to its peak within an eighth of a beat of the centre, relative to the centre.
+ * Null without a clear kick.
+ */
+function kickAttack(average: Float64Array): number | null {
+  const half = (average.length - 1) / 2;
   const reach = Math.max(2, Math.round(half / 4));
   let peak = half;
-  for (let i = half - reach; i <= half + reach; i++) if (template[i] > template[peak]) peak = i;
-  let floor = template[peak];
-  for (let i = Math.max(0, peak - 2 * reach); i <= peak; i++) floor = Math.min(floor, template[i]);
-  if (template[peak] <= floor * MIN_WINDOW_PUNCH) return 0;
+  for (let i = half - reach; i <= half + reach; i++) if (average[i] > average[peak]) peak = i;
+  let floor = average[peak];
+  for (let i = Math.max(0, peak - 2 * reach); i <= peak; i++) floor = Math.min(floor, average[i]);
+  if (average[peak] <= floor * MIN_WINDOW_PUNCH) return null;
 
-  const level = floor + 0.5 * (template[peak] - floor);
+  const level = floor + 0.5 * (average[peak] - floor);
   for (let i = peak; i > 0; i--) {
-    if (template[i - 1] < level) {
-      const frac = (level - template[i - 1]) / (template[i] - template[i - 1]);
+    if (average[i - 1] < level) {
+      const frac = (level - average[i - 1]) / (average[i] - average[i - 1]);
       return (i - 1 + frac - half) / KICK_ENVELOPE_RATE;
     }
   }
-  return 0;
+  return null;
 }
 
 /**
@@ -403,6 +481,12 @@ const COARSE_WINDOW_BEATS = 4;
 const COARSE_MIN_KICKS = 3;
 /** Measurements used to extrapolate drift. */
 const DRIFT_HISTORY = 6;
+/**
+ * Fastest drift the tracker follows, as a share of the period per beat (a tempo 4% off the
+ * track's average). Without a cap, kicks alternating with an off-beat bass read as a steady
+ * half-beat slip per window: a phantom tempo 8/7 of the real one.
+ */
+const MAX_DRIFT = 0.04;
 /** A kick-less stretch longer than this splits tracking into separate segments. */
 const MAX_GAP_BEATS = 16;
 /** Shorter segments are isolated hits (a pad swell in a breakdown) and are dropped. */
@@ -489,7 +573,7 @@ function trackSegments(
       segments.push(current);
       current = [];
     }
-    const expected = extrapolateDrift(current.slice(-DRIFT_HISTORY), beat);
+    const expected = extrapolateDrift(current.slice(-DRIFT_HISTORY), beat, period);
     const unwrapped = expected === null ? offset : offset + period * Math.round((expected - offset) / period);
     if (expected !== null && current.length >= 3 && Math.abs(unwrapped - expected) > period / 4) continue;
     current.push({ beat, offset: unwrapped });
@@ -510,8 +594,8 @@ function joinSegments(segments: DriftPoint[][], period: number): DriftPoint[][] 
     const tail = previous.slice(-DRIFT_HISTORY);
     const head = segment.slice(0, DRIFT_HISTORY);
     const middle = (tail[tail.length - 1].beat + head[0].beat) / 2;
-    const fromBefore = extrapolateDrift(tail, middle) ?? 0;
-    const fromAfter = extrapolateDrift([...head].reverse(), middle) ?? 0;
+    const fromBefore = extrapolateDrift(tail, middle, period) ?? 0;
+    const fromAfter = extrapolateDrift([...head].reverse(), middle, period) ?? 0;
     const shift = period * Math.round((fromBefore - fromAfter) / period);
     joined.push(segment.map((p) => ({ beat: p.beat, offset: p.offset + shift })));
   }
@@ -519,10 +603,10 @@ function joinSegments(segments: DriftPoint[][], period: number): DriftPoint[][] 
 }
 
 /**
- * Offset expected at `beat`, continuing from the last point at the median pairwise slope;
- * null without history.
+ * Offset expected at `beat`, continuing from the last point at the median pairwise slope
+ * (capped at MAX_DRIFT); null without history.
  */
-function extrapolateDrift(points: DriftPoint[], beat: number): number | null {
+function extrapolateDrift(points: DriftPoint[], beat: number, period: number): number | null {
   if (points.length === 0) return null;
   const last = points[points.length - 1];
   if (points.length === 1) return last.offset;
@@ -532,5 +616,6 @@ function extrapolateDrift(points: DriftPoint[], beat: number): number | null {
       slopes.push((points[j].offset - points[i].offset) / (points[j].beat - points[i].beat));
     }
   }
-  return last.offset + median(slopes) * (beat - last.beat);
+  const limit = MAX_DRIFT * period;
+  return last.offset + Math.max(-limit, Math.min(limit, median(slopes))) * (beat - last.beat);
 }

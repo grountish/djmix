@@ -96,6 +96,10 @@ export function startAutomixTransition(
     },
   );
   runner.start();
+  if (runner.lockAbandoned) {
+    plan.warnings.push('Beat clocks disagree: not beat-locked');
+    console.warn('[automix] beat lock abandoned: the two beat clocks disagree by more than 3%');
+  }
 
   const timer = setInterval(() => {
     const now = graph.ctx.currentTime;

@@ -26,6 +26,11 @@ export type LaneValues = Record<LaneTarget, Partial<Record<LaneControl, number>>
 const SEND_AHEAD = STRETCH_LEAD + 0.15;
 const CURVE_POINTS = 48;
 const RATE_EPSILON = 1e-7;
+/**
+ * Beat-lock rates further than this from the planned incoming rate mean a beat clock is wrong
+ * (beats miscounted); the incoming deck then holds the planned rate instead of chasing them.
+ */
+const MAX_LOCK_DEVIATION = 0.03;
 
 /**
  * Plays a TransitionPlan on the audio clock. Everything is derived from the outgoing track's
@@ -41,6 +46,8 @@ export class TransitionRunner {
   /** Clock time the incoming track is back at its own tempo. */
   finishTime = 0;
   finished = false;
+  /** The beat clocks disagreed beyond MAX_LOCK_DEVIATION, so the incoming deck wasn't beat-locked. */
+  lockAbandoned = false;
 
   private readonly queues: Record<LaneTarget, Command[]> = { outgoing: [], incoming: [] };
   private readonly pendingUntil: Record<LaneTarget, number> = { outgoing: -Infinity, incoming: -Infinity };
@@ -184,11 +191,16 @@ export class TransitionRunner {
     const { player, clock } = this.incoming;
     const firstBeat = this.plan.incomingStartBar * 4;
     const overlapBeats = endBeat - startBeat;
-    const beatRate = (j: number) =>
+    const planned = this.plan.tempo.incomingRate;
+    const lockRate = (j: number) =>
       (clock.timeOf(firstBeat + j + 1) - clock.timeOf(firstBeat + j)) /
       (this.outgoingBeats.get(startBeat + j + 1)! - this.outgoingBeats.get(startBeat + j)!);
+    this.lockAbandoned = Array.from({ length: overlapBeats }, (_, j) => lockRate(j)).some(
+      (rate) => Math.abs(rate / planned - 1) > MAX_LOCK_DEVIATION,
+    );
+    const beatRate = (j: number) => (this.lockAbandoned ? planned : lockRate(j));
 
-    let rate = overlapBeats > 0 ? beatRate(0) : this.plan.tempo.incomingRate;
+    let rate = overlapBeats > 0 ? beatRate(0) : planned;
     player.pause();
     player.setKeyLock(true);
     player.setSemitones(this.plan.incomingSemitones);

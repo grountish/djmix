@@ -4,9 +4,10 @@ import { analyzeAudio } from '../analysis/analyzeAudio';
 import { BUTTERWORTH4_Q, filtfilt, lowpass } from '../analysis/dsp';
 import { synthesizeTrack, type SyntheticSection } from '../analysis/syntheticTrack';
 import type { AudioAnalysis } from '../analysis/types';
+import { constantClock } from '../analysis/beatClock';
 import { createOfflineMix } from '../engine/offlineMix';
 import { createStretchNode } from '../engine/stretch';
-import { planTransition } from './planner';
+import { planTransition, type TransitionPlan } from './planner';
 import { renderWithRunner, TransitionRunner } from './runner';
 import { trackClock } from './trackClock';
 
@@ -142,4 +143,43 @@ describe('transition runner', () => {
     const tail = analyzeAudio([slice(0, runner.finishTime + 0.5, seconds - 0.5)], SAMPLE_RATE);
     expect(tail.bpm).toBeCloseTo(128, 1);
   }, 180000);
+
+  it("doesn't chase beat-lock rates when the two beat clocks disagree", async () => {
+    // 120 → 123 BPM meeting at 121.5; the incoming clock is either right or miscounts beats
+    // as 8/7 of its tempo (the drift tracker's old off-beat slip).
+    const lockFor = async (incomingClockBpm: number) => {
+      const ctx = new webAudio.OfflineAudioContext({ numberOfChannels: 2, length: SAMPLE_RATE, sampleRate: SAMPLE_RATE });
+      const mix = createOfflineMix(ctx);
+      const silence = ctx.createBuffer(2, 120 * SAMPLE_RATE, SAMPLE_RATE);
+      await mix.decks.A.load(silence);
+      await mix.decks.B.load(silence);
+      mix.decks.A.play(0);
+      const plan = {
+        kind: 'blend',
+        tempo: { canBlend: true, meetBpm: 121.5, outgoingRate: 121.5 / 120, incomingRate: 121.5 / 123, outgoingRampBars: 0, incomingRampBars: 2 },
+        overlapBars: 8,
+        outgoingStartBar: 8,
+        outgoingRampStartBar: 8,
+        incomingStartBar: 0,
+        bassSwapBar: 4,
+        incomingSemitones: 0,
+        harmonic: { score: 1, outgoingKey: '8A', incomingKey: '8A' },
+        lanes: [],
+        warnings: [],
+      } satisfies TransitionPlan;
+      const runner = new TransitionRunner(
+        ctx,
+        mix.graph,
+        { id: 'A', player: mix.decks.A, clock: constantClock(0, 60 / 120) },
+        { id: 'B', player: mix.decks.B, clock: constantClock(0, 60 / incomingClockBpm) },
+        plan,
+      );
+      runner.start();
+      return { abandoned: runner.lockAbandoned, rate: mix.decks.B.currentRate };
+    };
+
+    expect(await lockFor(123)).toEqual({ abandoned: false, rate: expect.closeTo(121.5 / 123, 6) });
+    // Chasing the broken clock would play the incoming track at 121.5 / 140.6: 14% slow.
+    expect(await lockFor((123 * 8) / 7)).toEqual({ abandoned: true, rate: expect.closeTo(121.5 / 123, 6) });
+  });
 });
