@@ -1,59 +1,33 @@
-import { setDeckVolume, getDeckState, playDeck, pauseDeck } from './playbackEngine';
+import { clamp } from './engine/curves';
+import { getMixGraph } from './engine/liveGraph';
+import {
+  type DeckId,
+  scheduleCrossfade as scheduleGraphCrossfade,
+  setCrossfaderPosition,
+  setParamSmooth,
+} from './engine/mixGraph';
 
-let crossfaderValue = 0;
-let masterVolume = 1;
-
+/** -1 = full A, 0 = centre, 1 = full B (equal-power law). */
 export function setCrossfader(value: number): void {
-  crossfaderValue = Math.max(-1, Math.min(1, value));
-  applyCrossfaderVolumes();
-}
-
-export function getCrossfader(): number {
-  return crossfaderValue;
+  setCrossfaderPosition(getMixGraph(), clamp(value, -1, 1));
 }
 
 export function setMasterVolume(volume: number): void {
-  masterVolume = Math.max(0, Math.min(1, volume));
-  applyCrossfaderVolumes();
+  const graph = getMixGraph();
+  setParamSmooth(graph.master.gain, clamp(volume, 0, 1), graph.ctx);
 }
 
-export function getMasterVolume(): number {
-  return masterVolume;
+export function setChannelFader(deckId: DeckId, volume: number): void {
+  const graph = getMixGraph();
+  setParamSmooth(graph.decks[deckId].fader.gain, clamp(volume, 0, 1), graph.ctx);
 }
 
-function applyCrossfaderVolumes(): void {
-  const volumeA = calculateDeckVolume('A', crossfaderValue) * masterVolume;
-  const volumeB = calculateDeckVolume('B', crossfaderValue) * masterVolume;
-
-  setDeckVolume('A', volumeA);
-  setDeckVolume('B', volumeB);
-}
-
-function calculateDeckVolume(deck: 'A' | 'B', crossfader: number): number {
-  if (deck === 'A') {
-    if (crossfader <= 0) return 1;
-    return 1 - crossfader;
-  } else {
-    if (crossfader >= 0) return 1;
-    return 1 + crossfader;
-  }
-}
-
-export function playBothDecks(): void {
-  playDeck('A');
-  playDeck('B');
-}
-
-export function pauseBothDecks(): void {
-  pauseDeck('A');
-  pauseDeck('B');
-}
-
-export function getMixState() {
-  return {
-    deckA: getDeckState('A'),
-    deckB: getDeckState('B'),
-    crossfader: crossfaderValue,
-    masterVolume,
-  };
+/** Automates the crossfader from `from` to `to` on the audio clock, starting at `startTime`. */
+export function scheduleCrossfade(
+  from: number,
+  to: number,
+  startTime: number,
+  duration: number,
+): void {
+  scheduleGraphCrossfade(getMixGraph(), from, to, startTime, duration);
 }

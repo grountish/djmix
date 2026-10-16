@@ -1,222 +1,130 @@
-import type { PlaybackMode, PlaybackState } from '@/types';
+import type { PlaybackMode } from '@/types';
 import { getAudioContext, decodeAudioFile } from './decoder';
+import { DeckPlayer } from './engine/deckPlayer';
+import { getMixGraph } from './engine/liveGraph';
+import type { DeckId, MixGraph } from './engine/mixGraph';
+import type { PlayheadAnchor } from './engine/transport';
 
 interface DeckEngine {
-  id: 'A' | 'B';
-  audioBuffer: AudioBuffer | null;
-  sourceNode: AudioBufferSourceNode | null;
-  gainNode: GainNode | null;
-  stretchNode: AudioWorkletNode | null;
-  startTime: number;
-  pausedAt: number;
+  player: DeckPlayer;
+  /** Tempo ratio requested by the UI; applied to the source only in rate mode. */
   playbackRate: number;
   playbackMode: PlaybackMode;
-  isPlaying: boolean;
   onTimeUpdate?: (time: number) => void;
   onEnded?: () => void;
   animationFrameId?: number;
 }
 
-const decks: Record<'A' | 'B', DeckEngine> = {
-  A: createDeckEngine('A'),
-  B: createDeckEngine('B'),
-};
+let decks: Record<DeckId, DeckEngine> | null = null;
+let decksGraph: MixGraph | null = null;
 
-function createDeckEngine(id: 'A' | 'B'): DeckEngine {
-  return {
-    id,
-    audioBuffer: null,
-    sourceNode: null,
-    gainNode: null,
-    stretchNode: null,
-    startTime: 0,
-    pausedAt: 0,
+function getDeck(deckId: DeckId): DeckEngine {
+  const graph = getMixGraph();
+  if (!decks || decksGraph !== graph) {
+    decks = { A: createDeckEngine(graph, 'A'), B: createDeckEngine(graph, 'B') };
+    decksGraph = graph;
+  }
+  return decks[deckId];
+}
+
+function createDeckEngine(graph: MixGraph, id: DeckId): DeckEngine {
+  const deck: DeckEngine = {
+    player: new DeckPlayer(graph.ctx, graph.decks[id].input),
     playbackRate: 1,
     playbackMode: 'rate',
-    isPlaying: false,
   };
+  deck.player.onEnded = () => {
+    stopTimeTracking(deck);
+    deck.onEnded?.();
+  };
+  return deck;
 }
 
-export async function loadTrackToDeck(deckId: 'A' | 'B', filePath: string): Promise<void> {
-  const deck = decks[deckId];
+function appliedRate(deck: DeckEngine): number {
+  return deck.playbackMode === 'rate' ? deck.playbackRate : 1;
+}
 
+export async function loadTrackToDeck(deckId: DeckId, filePath: string): Promise<void> {
   stopDeck(deckId);
-
-  deck.audioBuffer = await decodeAudioFile(filePath);
-  deck.pausedAt = 0;
-  deck.startTime = 0;
+  getDeck(deckId).player.load(await decodeAudioFile(filePath));
 }
 
-export function loadAudioBufferToDeck(deckId: 'A' | 'B', audioBuffer: AudioBuffer): void {
-  const deck = decks[deckId];
-
+export function loadAudioBufferToDeck(deckId: DeckId, audioBuffer: AudioBuffer): void {
   stopDeck(deckId);
-
-  deck.audioBuffer = audioBuffer;
-  deck.pausedAt = 0;
-  deck.startTime = 0;
+  getDeck(deckId).player.load(audioBuffer);
 }
 
-export function playDeck(deckId: 'A' | 'B'): boolean {
-  const deck = decks[deckId];
-  if (!deck.audioBuffer || !(deck.audioBuffer instanceof AudioBuffer) || deck.isPlaying)
-    return false;
-
+/** Starts the deck at audio-clock time `when` (default: now). */
+export function playDeck(deckId: DeckId, when?: number): boolean {
+  const deck = getDeck(deckId);
   const ctx = getAudioContext();
-
   if (ctx.state === 'suspended') {
     ctx.resume();
   }
 
-  const source = ctx.createBufferSource();
-  source.buffer = deck.audioBuffer;
-  source.playbackRate.value = deck.playbackMode === 'rate' ? deck.playbackRate : 1;
-
-  const gainNode = ctx.createGain();
-  gainNode.gain.value = 1;
-
-  source.connect(gainNode);
-  gainNode.connect(ctx.destination);
-
-  const offset = deck.pausedAt;
-  deck.startTime = ctx.currentTime - offset / deck.playbackRate;
-
-  source.start(0, offset);
-
-  source.onended = () => {
-    if (deck.isPlaying) {
-      deck.isPlaying = false;
-      deck.pausedAt = 0;
-      deck.onEnded?.();
-    }
-  };
-
-  deck.sourceNode = source;
-  deck.gainNode = gainNode;
-  deck.isPlaying = true;
-
-  startTimeTracking(deckId);
-  return true;
+  const started = deck.player.play(when);
+  if (started) {
+    startTimeTracking(deck);
+  }
+  return started;
 }
 
-export function pauseDeck(deckId: 'A' | 'B'): void {
-  const deck = decks[deckId];
-  if (!deck.isPlaying) return;
-
-  const currentTime = getDeckCurrentTime(deckId);
-
-  if (deck.sourceNode) {
-    deck.sourceNode.onended = null;
-    deck.sourceNode.stop();
-    deck.sourceNode.disconnect();
-  }
-
-  if (deck.gainNode) {
-    deck.gainNode.disconnect();
-  }
-
-  deck.pausedAt = currentTime;
-  deck.isPlaying = false;
-
-  stopTimeTracking(deckId);
+export function pauseDeck(deckId: DeckId): void {
+  const deck = getDeck(deckId);
+  deck.player.pause();
+  stopTimeTracking(deck);
 }
 
-export function stopDeck(deckId: 'A' | 'B'): void {
-  pauseDeck(deckId);
-  const deck = decks[deckId];
-  deck.pausedAt = 0;
-  deck.startTime = 0;
+export function stopDeck(deckId: DeckId): void {
+  const deck = getDeck(deckId);
+  deck.player.stop();
+  stopTimeTracking(deck);
 }
 
-export function seekDeck(deckId: 'A' | 'B', time: number): void {
-  const deck = decks[deckId];
-  const wasPlaying = deck.isPlaying;
-
-  if (wasPlaying) {
-    pauseDeck(deckId);
-  }
-
-  deck.pausedAt = Math.max(0, Math.min(time, deck.audioBuffer?.duration || 0));
-
-  if (wasPlaying) {
-    playDeck(deckId);
-  }
+export function seekDeck(deckId: DeckId, time: number): void {
+  getDeck(deckId).player.seek(time);
 }
 
-export function setDeckPlaybackRate(deckId: 'A' | 'B', rate: number): void {
-  const deck = decks[deckId];
+export function setDeckPlaybackRate(deckId: DeckId, rate: number): void {
+  const deck = getDeck(deckId);
   deck.playbackRate = rate;
-
-  if (deck.isPlaying && deck.sourceNode && deck.playbackMode === 'rate') {
-    deck.sourceNode.playbackRate.value = rate;
-  }
+  deck.player.setRate(appliedRate(deck));
 }
 
-export function setDeckVolume(deckId: 'A' | 'B', volume: number): void {
-  const deck = decks[deckId];
-  if (deck.gainNode) {
-    deck.gainNode.gain.value = Math.max(0, Math.min(1, volume));
-  }
-}
-
-export function setDeckPlaybackMode(deckId: 'A' | 'B', mode: PlaybackMode): void {
-  const deck = decks[deckId];
-  const wasPlaying = deck.isPlaying;
-  const currentTime = deck.isPlaying ? getDeckCurrentTime(deckId) : deck.pausedAt;
-
-  if (wasPlaying) {
-    pauseDeck(deckId);
-  }
-
+export function setDeckPlaybackMode(deckId: DeckId, mode: PlaybackMode): void {
+  const deck = getDeck(deckId);
   deck.playbackMode = mode;
-  deck.pausedAt = currentTime;
-
-  if (wasPlaying) {
-    playDeck(deckId);
-  }
+  deck.player.setRate(appliedRate(deck));
 }
 
-export function getDeckCurrentTime(deckId: 'A' | 'B'): number {
-  const deck = decks[deckId];
-  if (!deck.isPlaying) return deck.pausedAt;
-
-  const ctx = getAudioContext();
-  const elapsed = (ctx.currentTime - deck.startTime) * deck.playbackRate;
-  return Math.min(elapsed, deck.audioBuffer?.duration || 0);
+export function getDeckCurrentTime(deckId: DeckId): number {
+  return getDeck(deckId).player.currentTime();
 }
 
-export function getDeckDuration(deckId: 'A' | 'B'): number {
-  return decks[deckId].audioBuffer?.duration || 0;
+export function getDeckDuration(deckId: DeckId): number {
+  return getDeck(deckId).player.duration;
 }
 
-export function getDeckState(deckId: 'A' | 'B'): PlaybackState {
-  const deck = decks[deckId];
-  return {
-    isPlaying: deck.isPlaying,
-    currentTime: getDeckCurrentTime(deckId),
-    duration: deck.audioBuffer?.duration || 0,
-    playbackRate: deck.playbackRate,
-    volume: deck.gainNode?.gain.value || 1,
-  };
+/** Where the deck's playhead sits on the audio clock; null when stopped. */
+export function getDeckAnchor(deckId: DeckId): PlayheadAnchor | null {
+  return getDeck(deckId).player.getAnchor();
 }
 
-export function setDeckTimeUpdateCallback(
-  deckId: 'A' | 'B',
-  callback: (time: number) => void,
-): void {
-  decks[deckId].onTimeUpdate = callback;
+export function setDeckTimeUpdateCallback(deckId: DeckId, callback: (time: number) => void): void {
+  getDeck(deckId).onTimeUpdate = callback;
 }
 
-export function setDeckEndedCallback(deckId: 'A' | 'B', callback: () => void): void {
-  decks[deckId].onEnded = callback;
+export function setDeckEndedCallback(deckId: DeckId, callback: () => void): void {
+  getDeck(deckId).onEnded = callback;
 }
 
-function startTimeTracking(deckId: 'A' | 'B'): void {
-  const deck = decks[deckId];
+// UI refresh only; audio timing never depends on animation frames.
+function startTimeTracking(deck: DeckEngine): void {
+  stopTimeTracking(deck);
 
   const tick = () => {
-    if (deck.isPlaying) {
-      deck.onTimeUpdate?.(getDeckCurrentTime(deckId));
+    if (deck.player.isPlaying) {
+      deck.onTimeUpdate?.(deck.player.currentTime());
       deck.animationFrameId = requestAnimationFrame(tick);
     }
   };
@@ -224,8 +132,7 @@ function startTimeTracking(deckId: 'A' | 'B'): void {
   deck.animationFrameId = requestAnimationFrame(tick);
 }
 
-function stopTimeTracking(deckId: 'A' | 'B'): void {
-  const deck = decks[deckId];
+function stopTimeTracking(deck: DeckEngine): void {
   if (deck.animationFrameId) {
     cancelAnimationFrame(deck.animationFrameId);
     deck.animationFrameId = undefined;
@@ -236,51 +143,20 @@ export function calculateTempoRatio(sourceBpm: number, targetBpm: number): numbe
   return targetBpm / sourceBpm;
 }
 
-export function syncDeckToTargetBpm(deckId: 'A' | 'B', sourceBpm: number, targetBpm: number): void {
-  const ratio = calculateTempoRatio(sourceBpm, targetBpm);
-  setDeckPlaybackRate(deckId, ratio);
+export function syncDeckToTargetBpm(deckId: DeckId, sourceBpm: number, targetBpm: number): void {
+  setDeckPlaybackRate(deckId, calculateTempoRatio(sourceBpm, targetBpm));
 }
 
-export function getDeckAudioBuffer(deckId: 'A' | 'B'): AudioBuffer | null {
-  const buffer = decks[deckId].audioBuffer;
-  return buffer instanceof AudioBuffer ? buffer : null;
+export function getDeckAudioBuffer(deckId: DeckId): AudioBuffer | null {
+  return getDeck(deckId).player.audioBuffer;
 }
 
 // Check if the deck engine is actually playing (ignoring React state)
-export function isDeckEnginePlaying(deckId: 'A' | 'B'): boolean {
-  return decks[deckId].isPlaying;
+export function isDeckEnginePlaying(deckId: DeckId): boolean {
+  return getDeck(deckId).player.isPlaying;
 }
 
-// Force stop the deck, ensuring audio is stopped regardless of state
-export function forceStopDeck(deckId: 'A' | 'B'): void {
-  const deck = decks[deckId];
-
-  // Save current position before stopping
-  if (deck.isPlaying) {
-    deck.pausedAt = getDeckCurrentTime(deckId);
-  }
-
-  // Stop any existing source
-  if (deck.sourceNode) {
-    try {
-      deck.sourceNode.onended = null;
-      deck.sourceNode.stop();
-      deck.sourceNode.disconnect();
-    } catch (e) {
-      // Ignore errors if already stopped
-    }
-    deck.sourceNode = null;
-  }
-
-  if (deck.gainNode) {
-    try {
-      deck.gainNode.disconnect();
-    } catch (e) {
-      // Ignore errors
-    }
-    deck.gainNode = null;
-  }
-
-  deck.isPlaying = false;
-  stopTimeTracking(deckId);
+// Stop output, keeping the playhead position
+export function forceStopDeck(deckId: DeckId): void {
+  pauseDeck(deckId);
 }

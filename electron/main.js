@@ -16,6 +16,8 @@ function createWindow() {
       nodeIntegration: false,
       contextIsolation: true,
       preload: path.join(__dirname, 'preload.js'),
+      // Automix timers must keep running while the window is hidden or minimised
+      backgroundThrottling: false,
     },
     backgroundColor: '#1a1a2e',
   });

@@ -28,7 +28,7 @@ A DJ-style track analysis and BPM-based mixing application built with Electron, 
 - **Two Playback Modes**:
   - **Rate Mode**: Changes playback speed (affects both tempo and pitch)
   - **Stretch Mode**: Attempts to preserve pitch while changing tempo
-- **Crossfader**: Blend between Deck A and Deck B
+- **Crossfader**: Equal-power blend between Deck A and Deck B
 - **Volume Controls**: Per-deck volume and master volume
 - **Analysis Caching**: BPM results are cached locally to avoid recomputation
 
@@ -96,6 +96,7 @@ npm run dev
 ```
 src/
 ├── audio/              # Audio processing modules
+│   ├── engine/         # Mix graph, deck player, audio-clock transport (shared by app and offline tests)
 │   ├── bpmAnalyzer.ts  # BPM detection (swappable)
 │   ├── decoder.ts      # Audio file decoding
 │   ├── fileImporter.ts # File import & metadata
@@ -146,7 +147,7 @@ src/
 1. **No Beat Grid**: Tracks are not beat-gridded; sync is BPM-based only
 2. **No Key Detection**: Musical key analysis not implemented
 3. **No Effects**: No EQ, filters, or audio effects
-4. **Basic Crossfader**: Linear crossfade only, no curve options
+4. **Crossfader Curve**: Equal-power only, no curve options
 5. **No Cue Points**: Cannot set/recall cue points
 6. **Stretch Quality**: Pitch-preserving stretch may have artifacts at extreme tempo changes
 7. **Large Files**: Very long audio files may take time to decode and analyze
@@ -179,6 +180,9 @@ src/
 ```bash
 # Type check
 npm run typecheck
+
+# Unit + offline-render tests (Vitest, Web Audio via node-web-audio-api)
+npm test
 
 # Development with hot reload
 npm run dev

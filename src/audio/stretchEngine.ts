@@ -1,12 +1,13 @@
 import { SoundTouch, SimpleFilter } from 'soundtouchjs';
 import { getAudioContext } from './decoder';
+import { getMixGraph } from './engine/liveGraph';
+import type { PlayheadAnchor } from './engine/transport';
 
 interface StretchProcessor {
   soundTouch: SoundTouch;
   filter: SimpleFilter;
   sourceNode: AudioBufferSourceNode | null;
   scriptNode: ScriptProcessorNode | null;
-  gainNode: GainNode | null;
   isPlaying: boolean;
   currentPosition: number;
   audioBuffer: AudioBuffer | null;
@@ -54,7 +55,6 @@ function createStretchProcessor(audioBuffer: AudioBuffer): StretchProcessor {
     filter,
     sourceNode: null,
     scriptNode: null,
-    gainNode: null,
     isPlaying: false,
     currentPosition: 0,
     audioBuffer,
@@ -83,8 +83,6 @@ export function playStretchMode(deckId: 'A' | 'B'): void {
   }
 
   const scriptNode = ctx.createScriptProcessor(BUFFER_SIZE, 0, 2);
-  const gainNode = ctx.createGain();
-  gainNode.gain.value = 1;
 
   const sampleRate = processor.audioBuffer.sampleRate;
   let framePosition = Math.floor(processor.currentPosition * sampleRate);
@@ -114,12 +112,19 @@ export function playStretchMode(deckId: 'A' | 'B'): void {
     processor.onTimeUpdate?.(processor.currentPosition);
   };
 
-  scriptNode.connect(gainNode);
-  gainNode.connect(ctx.destination);
+  scriptNode.connect(getMixGraph().decks[deckId].input);
 
   processor.scriptNode = scriptNode;
-  processor.gainNode = gainNode;
   processor.isPlaying = true;
+}
+
+/**
+ * Starts stretch playback at audio-clock time `when`. Timer-based, so accurate only to a few
+ * milliseconds plus one processing block; the Phase 2 worklet replaces this.
+ */
+export function playStretchModeAt(deckId: 'A' | 'B', when: number): void {
+  const delayMs = Math.max(0, (when - getAudioContext().currentTime) * 1000);
+  setTimeout(() => playStretchMode(deckId), delayMs);
 }
 
 export function pauseStretchMode(deckId: 'A' | 'B'): void {
@@ -129,12 +134,8 @@ export function pauseStretchMode(deckId: 'A' | 'B'): void {
   if (processor.scriptNode) {
     processor.scriptNode.disconnect();
   }
-  if (processor.gainNode) {
-    processor.gainNode.disconnect();
-  }
 
   processor.scriptNode = null;
-  processor.gainNode = null;
   processor.isPlaying = false;
 }
 
@@ -170,16 +171,20 @@ export function setStretchTempo(deckId: 'A' | 'B', tempo: number): void {
   processor.soundTouch.tempo = tempo;
 }
 
-export function setStretchVolume(deckId: 'A' | 'B', volume: number): void {
-  const processor = stretchProcessors[deckId];
-  if (!processor || !processor.gainNode) return;
-
-  processor.gainNode.gain.value = Math.max(0, Math.min(1, volume));
-}
-
 export function getStretchCurrentTime(deckId: 'A' | 'B'): number {
   const processor = stretchProcessors[deckId];
   return processor?.currentPosition || 0;
+}
+
+/** Approximate audio-clock anchor; position only advances once per processing block. */
+export function getStretchAnchor(deckId: 'A' | 'B'): PlayheadAnchor | null {
+  const processor = stretchProcessors[deckId];
+  if (!processor?.isPlaying) return null;
+  return {
+    ctxTime: getAudioContext().currentTime,
+    trackTime: processor.currentPosition,
+    rate: processor.tempo,
+  };
 }
 
 export function setStretchTimeUpdateCallback(
@@ -221,15 +226,6 @@ export function forceStopStretchMode(deckId: 'A' | 'B'): void {
       // Ignore errors
     }
     processor.scriptNode = null;
-  }
-
-  if (processor.gainNode) {
-    try {
-      processor.gainNode.disconnect();
-    } catch (e) {
-      // Ignore errors
-    }
-    processor.gainNode = null;
   }
 
   processor.isPlaying = false;

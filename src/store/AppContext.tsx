@@ -13,13 +13,14 @@ import {
   setDeckPlaybackRate,
   isDeckEnginePlaying,
   forceStopDeck,
-  setDeckVolume as setDeckEngineVolume,
+  getDeckAnchor,
 } from '@/audio/playbackEngine';
 import { isElectronEnvironment } from '@/audio/fileImporter';
-import { setCrossfader, setMasterVolume } from '@/audio/mixingEngine';
+import { setChannelFader, setCrossfader, setMasterVolume } from '@/audio/mixingEngine';
 import {
   initStretchMode,
   playStretchMode,
+  playStretchModeAt,
   seekStretchMode,
   setStretchTempo,
   setStretchTimeUpdateCallback,
@@ -27,9 +28,9 @@ import {
   isStretchModeInitialized,
   isStretchEnginePlaying,
   forceStopStretchMode,
-  setStretchVolume,
+  getStretchAnchor,
 } from '@/audio/stretchEngine';
-import { triggerTransition } from '@/audio/automixController';
+import { cancelTransition, triggerTransition } from '@/audio/automixController';
 
 interface AppState {
   tracks: Track[];
@@ -387,8 +388,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }, []),
 
     setDeckVolume: useCallback((deck: 'A' | 'B', volume: number) => {
-      setDeckEngineVolume(deck, volume);
-      setStretchVolume(deck, volume);
+      setChannelFader(deck, volume);
       dispatch({ type: 'SET_DECK_VOLUME', deck, volume });
     }, []),
 
@@ -408,6 +408,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     ),
 
     setCrossfader: useCallback((value: number) => {
+      // Grabbing the crossfader takes over from a running automix transition
+      if (cancelTransition()) {
+        dispatch({ type: 'SET_AUTOMIX_TRANSITIONING', isTransitioning: false });
+      }
       setCrossfader(value);
       dispatch({ type: 'SET_CROSSFADER', value });
     }, []),
@@ -497,11 +501,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         dispatch({ type: 'SET_DECK_PLAYING', deck: sourceDeckId, isPlaying: true });
       }
 
-      dispatch({ type: 'SET_AUTOMIX_TRANSITIONING', isTransitioning: true });
-      dispatch({ type: 'SET_AUTOMIX_ACTIVE_DECK', deck: sourceDeckId });
-
-      // Trigger the transition - this will sync BPM and start on the beat
-      triggerTransition(
+      // Trigger the transition - this will sync BPM and start on the next bar
+      const started = triggerTransition(
         sourceDeckId,
         sourceDeckState,
         targetDeckState,
@@ -526,12 +527,19 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
             dispatch({ type: 'SET_DECK_PLAYBACK_RATE', deck, rate: ratio });
           },
-          onStartPlay: (deck: 'A' | 'B') => {
+          getAnchor: (deck: 'A' | 'B') => {
             const dState = deck === 'A' ? state.deckA : state.deckB;
             if (dState.playbackMode === 'stretch' && isStretchModeInitialized(deck)) {
-              playStretchMode(deck);
+              return getStretchAnchor(deck);
+            }
+            return getDeckAnchor(deck);
+          },
+          onStartPlay: (deck: 'A' | 'B', when: number) => {
+            const dState = deck === 'A' ? state.deckA : state.deckB;
+            if (dState.playbackMode === 'stretch' && isStretchModeInitialized(deck)) {
+              playStretchModeAt(deck, when);
             } else {
-              playDeck(deck);
+              playDeck(deck, when);
             }
             dispatch({ type: 'SET_DECK_PLAYING', deck, isPlaying: true });
           },
@@ -550,8 +558,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             }
             dispatch({ type: 'SET_DECK_TIME', deck, currentTime: time });
           },
-          onCrossfaderChange: (value: number) => {
-            setCrossfader(value);
+          onCrossfaderDisplay: (value: number) => {
             dispatch({ type: 'SET_CROSSFADER', value });
           },
           onTransitionComplete: () => {
@@ -561,6 +568,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         },
         state.automix.crossfadeDuration,
       );
+
+      if (started) {
+        dispatch({ type: 'SET_AUTOMIX_TRANSITIONING', isTransitioning: true });
+        dispatch({ type: 'SET_AUTOMIX_ACTIVE_DECK', deck: sourceDeckId });
+      }
     }, [state.deckA, state.deckB, state.crossfader, state.automix.crossfadeDuration]),
   };
 
