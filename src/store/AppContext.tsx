@@ -23,6 +23,7 @@ import {
   setMasterVolume,
 } from '@/audio/mixingEngine';
 import { cancelTransition, describePlan, startAutomixTransition } from '@/audio/automixController';
+import { orderSet, sequencerTrackFromAnalysis, type TempoDirection } from '@/audio/mix/sequencer';
 
 interface AppState {
   tracks: Track[];
@@ -33,12 +34,18 @@ interface AppState {
   crossfader: number;
   masterVolume: number;
   referenceTrackId: string | null;
+  /** Track ids automix plays next, in order. */
+  queue: string[];
+  /** Track ids already played this session; automix won't repeat them. */
+  played: string[];
   automix: {
     enabled: boolean;
     isTransitioning: boolean;
     activeDeck: 'A' | 'B' | null;
     /** What the last transition plan does, for the status bar. */
     status: string | null;
+    /** Which way the set's tempo travels when automix orders or picks tracks. */
+    direction: TempoDirection;
   };
 }
 
@@ -63,7 +70,10 @@ type Action =
   | { type: 'SET_AUTOMIX_ENABLED'; enabled: boolean }
   | { type: 'SET_AUTOMIX_TRANSITIONING'; isTransitioning: boolean }
   | { type: 'SET_AUTOMIX_ACTIVE_DECK'; deck: 'A' | 'B' | null }
-  | { type: 'SET_AUTOMIX_STATUS'; status: string | null };
+  | { type: 'SET_AUTOMIX_STATUS'; status: string | null }
+  | { type: 'SET_AUTOMIX_DIRECTION'; direction: TempoDirection }
+  | { type: 'SET_QUEUE'; queue: string[] }
+  | { type: 'MARK_PLAYED'; trackId: string };
 
 const createInitialDeckState = (): DeckState => ({
   track: null,
@@ -89,11 +99,14 @@ const initialState: AppState = {
   crossfader: 0,
   masterVolume: 1,
   referenceTrackId: null,
+  queue: [],
+  played: [],
   automix: {
     enabled: false,
     isTransitioning: false,
     activeDeck: null,
     status: null,
+    direction: 'up',
   },
 };
 
@@ -112,6 +125,7 @@ function reducer(state: AppState, action: Action): AppState {
       return {
         ...state,
         tracks: state.tracks.filter((t) => t.id !== action.trackId),
+        queue: state.queue.filter((id) => id !== action.trackId),
       };
 
     case 'SET_SORT':
@@ -246,6 +260,17 @@ function reducer(state: AppState, action: Action): AppState {
     case 'SET_AUTOMIX_STATUS':
       return { ...state, automix: { ...state.automix, status: action.status } };
 
+    case 'SET_AUTOMIX_DIRECTION':
+      return { ...state, automix: { ...state.automix, direction: action.direction } };
+
+    case 'SET_QUEUE':
+      return { ...state, queue: action.queue };
+
+    case 'MARK_PLAYED':
+      return state.played.includes(action.trackId)
+        ? state
+        : { ...state, played: [...state.played, action.trackId] };
+
     default:
       return state;
   }
@@ -274,6 +299,13 @@ interface AppContextValue {
     syncToTarget: (deck: 'A' | 'B') => void;
     setAutomixEnabled: (enabled: boolean) => void;
     triggerAutomix: () => void;
+    addToQueue: (trackId: string) => void;
+    removeFromQueue: (trackId: string) => void;
+    moveInQueue: (trackId: string, offset: number) => void;
+    /** Orders the queue for the set's direction, continuing from the playing track. */
+    smartOrderQueue: () => void;
+    setAutomixDirection: (direction: TempoDirection) => void;
+    markPlayed: (trackId: string) => void;
   };
 }
 
@@ -373,9 +405,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }, []),
 
     setCrossfader: useCallback((value: number) => {
-      // Grabbing the crossfader takes over from a running automix transition
+      // Grabbing the crossfader takes over from a running automix transition (and from Auto,
+      // which would otherwise start it again)
       if (cancelTransition()) {
         dispatch({ type: 'SET_AUTOMIX_TRANSITIONING', isTransitioning: false });
+        dispatch({ type: 'SET_AUTOMIX_ENABLED', enabled: false });
+        dispatch({ type: 'SET_AUTOMIX_STATUS', status: 'Mix cancelled: crossfader moved' });
       }
       setCrossfader(value);
       dispatch({ type: 'SET_CROSSFADER', value });
@@ -450,6 +485,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         onFinished: () => {
           dispatch({ type: 'SET_AUTOMIX_TRANSITIONING', isTransitioning: false });
           dispatch({ type: 'SET_AUTOMIX_ACTIVE_DECK', deck: targetDeckId });
+          dispatch({ type: 'MARK_PLAYED', trackId: source.track!.id });
         },
         onTick: (rates) => {
           dispatch({ type: 'SET_DECK_PLAYBACK_RATE', deck: 'A', rate: rates.A });
@@ -469,6 +505,52 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       dispatch({ type: 'SET_AUTOMIX_ACTIVE_DECK', deck: sourceDeckId });
       dispatch({ type: 'SET_AUTOMIX_STATUS', status: describePlan(plan) });
     }, [state.deckA, state.deckB]),
+
+    addToQueue: useCallback(
+      (trackId: string) => {
+        if (!state.queue.includes(trackId)) dispatch({ type: 'SET_QUEUE', queue: [...state.queue, trackId] });
+      },
+      [state.queue],
+    ),
+
+    removeFromQueue: useCallback(
+      (trackId: string) => dispatch({ type: 'SET_QUEUE', queue: state.queue.filter((id) => id !== trackId) }),
+      [state.queue],
+    ),
+
+    moveInQueue: useCallback(
+      (trackId: string, offset: number) => {
+        const from = state.queue.indexOf(trackId);
+        const to = Math.max(0, Math.min(state.queue.length - 1, from + offset));
+        if (from < 0 || from === to) return;
+        const queue = [...state.queue];
+        queue.splice(to, 0, queue.splice(from, 1)[0]);
+        dispatch({ type: 'SET_QUEUE', queue });
+      },
+      [state.queue],
+    ),
+
+    smartOrderQueue: useCallback(() => {
+      const byId = new Map(state.tracks.map((t) => [t.id, t]));
+      const playing = [state.deckA, state.deckB].find((d) => d.playback.isPlaying)?.track;
+      const ids = state.queue.filter((id) => byId.get(id)?.analysis);
+      const unanalysed = state.queue.filter((id) => !byId.get(id)?.analysis);
+      const startId = playing?.analysis && !ids.includes(playing.id) ? playing.id : undefined;
+      const candidates = [...(startId ? [startId] : []), ...ids].map((id) =>
+        sequencerTrackFromAnalysis(id, byId.get(id)!.analysis!),
+      );
+      const order = orderSet(candidates, { startId, direction: state.automix.direction });
+      const ordered = order.tracks.map((t) => t.id).filter((id) => id !== startId);
+      dispatch({ type: 'SET_QUEUE', queue: [...ordered, ...unanalysed] });
+    }, [state.tracks, state.queue, state.deckA, state.deckB, state.automix.direction]),
+
+    setAutomixDirection: useCallback((direction: TempoDirection) => {
+      dispatch({ type: 'SET_AUTOMIX_DIRECTION', direction });
+    }, []),
+
+    markPlayed: useCallback((trackId: string) => {
+      dispatch({ type: 'MARK_PLAYED', trackId });
+    }, []),
   };
 
   return <AppContext.Provider value={{ state, actions }}>{children}</AppContext.Provider>;

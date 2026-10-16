@@ -1,6 +1,6 @@
 import { toCamelot, type MusicalKey } from '../analysis/key';
 import type { AudioAnalysis, TrackKey } from '../analysis/types';
-import { bestKeyShift, harmonicScore, transpose } from './harmonic';
+import { bestKeyShift, harmonicScore, MIN_KEY_SHIFT_CONFIDENCE, transpose } from './harmonic';
 import { chooseMixPoints } from './mixPoints';
 import { DEFAULT_TEMPO_POLICY, planTempo, type TempoPlan, type TempoPolicy } from './tempoPlan';
 import { blendTemplate, cutTemplate, type Lane } from './templates';
@@ -19,7 +19,7 @@ export const DEFAULT_PLAN_POLICY: PlanPolicy = {
   tempo: DEFAULT_TEMPO_POLICY,
   maxOverlapBars: 32,
   allowKeyShift: true,
-  minKeyConfidence: 0.15,
+  minKeyConfidence: MIN_KEY_SHIFT_CONFIDENCE,
 };
 
 /** Compatibility below this is a clash: shorter overlap, incoming mids held back. */

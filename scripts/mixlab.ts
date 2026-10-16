@@ -9,7 +9,6 @@ import { basename } from 'path';
 import { parseFile } from 'music-metadata';
 import * as webAudio from 'node-web-audio-api';
 import { analyzeAudio } from '../src/audio/analysis/analyzeAudio';
-import { BUTTERWORTH4_Q, filtfilt, lowpass } from '../src/audio/analysis/dsp';
 import { keyFromTag } from '../src/audio/analysis/key';
 import type { AudioAnalysis } from '../src/audio/analysis/types';
 import { attachLimiter } from '../src/audio/engine/limiter';
@@ -17,6 +16,7 @@ import { createOfflineMix } from '../src/audio/engine/offlineMix';
 import { createStretchNode } from '../src/audio/engine/stretch';
 import { describePlan } from '../src/audio/automixController';
 import { planTransition } from '../src/audio/mix/planner';
+import { summarizeTransition } from '../src/audio/mix/metrics';
 import { renderWithRunner, TransitionRunner } from '../src/audio/mix/runner';
 import { trackClock } from '../src/audio/mix/trackClock';
 
@@ -60,11 +60,6 @@ function writeWav(path: string, channels: Float32Array[], sampleRate: number): v
     }
   }
   writeFileSync(path, data);
-}
-
-/** Signed distance between two beat phases, in seconds. */
-function phase(time: number, beat0: number, period: number): number {
-  return ((((time - beat0) % period) + period * 1.5) % period) - period / 2;
 }
 
 async function main(): Promise<void> {
@@ -127,79 +122,41 @@ async function main(): Promise<void> {
   const channel = (c: number) => rendered.getChannelData(c);
   writeWav(outPath, [channel(0), channel(1)], SAMPLE_RATE);
 
-  // Beat lock during the overlap: both decks' grids, measured on what they actually played.
-  const slice = (c: number, from: number, to: number) =>
-    channel(c).slice(Math.round(from * SAMPLE_RATE), Math.round(to * SAMPLE_RATE));
   const report: Record<string, unknown> = { plan: describePlan(plan), wav: outPath, seconds };
   if (plan.overlapBars > 0) {
-    const from = runner.incomingStart + 0.5;
-    const to = runner.overlapEnd - 0.5;
-    const inc = analyzeAudio([slice(2, from, to)], SAMPLE_RATE);
-    const out = analyzeAudio([slice(3, from, to)], SAMPLE_RATE);
-    report.overlapBpm = { outgoing: +out.bpm.toFixed(3), incoming: +inc.bpm.toFixed(3), planned: +plan.tempo.meetBpm.toFixed(3) };
-    report.beatOffsetMs = +(phase(inc.firstBeatTime, out.firstBeatTime, 60 / plan.tempo.meetBpm) * 1000).toFixed(2);
-
-    // Per beat: where each deck's kick attack (50% of its rise) lands around the outgoing beat.
-    const envelope = (c: number) => {
-      const low = filtfilt(channel(c), BUTTERWORTH4_Q.map((q) => lowpass(150, SAMPLE_RATE, q)));
-      const hop = 22;
-      const env = new Float32Array(Math.floor(low.length / hop));
-      for (let j = 0; j < env.length; j++) {
-        let sum = 0;
-        for (let i = j * hop; i < (j + 1) * hop; i++) sum += low[i] * low[i];
-        env[j] = sum;
-      }
-      const smooth = new Float32Array(env.length);
-      for (let j = 4; j < env.length - 4; j++) {
-        let sum = 0;
-        for (let k = -4; k <= 4; k++) sum += env[j + k];
-        smooth[j] = sum / 9;
-      }
-      return { values: smooth, rate: SAMPLE_RATE / hop };
+    const startBeat = plan.outgoingStartBar * 4;
+    const overlapBeatTimes = Array.from({ length: plan.overlapBars * 4 }, (_, i) => runner.outgoingBeatTime(startBeat + i)!);
+    // The bass handover ramps over the quarter beat before the swap downbeat.
+    const swapBeat = plan.bassSwapBar * 4;
+    const metrics = summarizeTransition({
+      sampleRate: SAMPLE_RATE,
+      timingTaps: { incoming: channel(2), outgoing: channel(3) },
+      levelTaps: { incoming: channel(4), outgoing: channel(5) },
+      master: [channel(0), channel(1)],
+      overlapBeatTimes,
+      overlapStart: runner.incomingStart,
+      overlapEnd: runner.overlapEnd,
+      allowedCollisionBeats: [swapBeat - 1, swapBeat],
+    });
+    report.beatAlignmentMs = {
+      beats: metrics.alignment.summary.count,
+      mean: +metrics.alignment.summary.meanMs.toFixed(2),
+      p95: +metrics.alignment.summary.p95AbsMs.toFixed(2),
+      max: +metrics.alignment.summary.maxAbsMs.toFixed(2),
     };
-    const onset = (env: { values: Float32Array; rate: number }, time: number, reach: number) => {
-      const centre = Math.round(time * env.rate);
-      const span = Math.round(reach * env.rate);
-      let peak = centre - span;
-      for (let j = centre - span; j <= centre + span; j++) if (env.values[j] > env.values[peak]) peak = j;
-      let floor = env.values[peak];
-      for (let j = peak - span; j <= peak; j++) floor = Math.min(floor, env.values[j]);
-      if (env.values[peak] < 2 * floor + 1e-9) return null;
-      const level = (floor + env.values[peak]) / 2;
-      for (let j = peak; j > peak - span; j--) if (env.values[j - 1] < level) return (j - 0.5) / env.rate;
-      return null;
-    };
-    const incomingEnv = envelope(2);
-    const outgoingEnv = envelope(3);
-    const offsets: number[] = [];
-    const period = 60 / plan.tempo.meetBpm;
-    for (let beat = plan.outgoingStartBar * 4; beat < (plan.outgoingStartBar + plan.overlapBars) * 4; beat++) {
-      const time = runner.outgoingBeatTime(beat)!;
-      const a = onset(outgoingEnv, time, period / 4);
-      const b = onset(incomingEnv, time, period / 4);
-      if (a !== null && b !== null) offsets.push((b - a) * 1000);
-      if (process.env.MIXLAB_DEBUG) {
-        const ms = (x: number | null) => (x === null ? '  -  ' : ((x - time) * 1000).toFixed(1).padStart(6));
-        console.log(`beat ${beat}: outgoing ${ms(a)} incoming ${ms(b)}`);
-      }
+    report.lowBandCollisions = metrics.unexpectedCollisionBeats;
+    if (process.env.MIXLAB_DEBUG) {
+      console.log('aligned beats', JSON.stringify(metrics.alignment.beats.map((b) => [b.beat, +b.diffMs.toFixed(1)])));
+      const { times, lufs } = metrics.loudness;
+      const curve = times
+        .map((t, i) => [t, lufs[i]] as const)
+        .filter(([t]) => t >= runner.incomingStart - 8 && t <= runner.overlapEnd + 8 && Math.round(t * 10) % 10 === 0)
+        .map(([t, l]) => `${(t - runner.incomingStart).toFixed(0)}s:${l.toFixed(1)}`);
+      console.log('short-term LUFS around the overlap (s from start):', curve.join(' '));
     }
-    offsets.sort((x, y) => x - y);
-    report.kickOffsetMs = offsets.length
-      ? { beats: offsets.length, median: +offsets[offsets.length >> 1].toFixed(2), min: +offsets[0].toFixed(2), max: +offsets[offsets.length - 1].toFixed(2) }
-      : 'no beats with kicks on both decks';
-
-    // Low end per side of the bass swap (dB, after EQ and faders).
-    const lowDb = (c: number, fromBar: number, toBar: number) => {
-      const t0 = runner.outgoingBeatTime((plan.outgoingStartBar + fromBar) * 4)!;
-      const t1 = runner.outgoingBeatTime((plan.outgoingStartBar + toBar) * 4)!;
-      const low = filtfilt(slice(c, t0, t1), BUTTERWORTH4_Q.map((q) => lowpass(150, SAMPLE_RATE, q)));
-      return +(10 * Math.log10(low.reduce((s, v) => s + v * v, 0) / low.length + 1e-12)).toFixed(1);
-    };
-    const swap = plan.bassSwapBar;
-    report.lowEndDb = {
-      beforeSwap: { outgoing: lowDb(5, 0, swap - 1), incoming: lowDb(4, 0, swap - 1) },
-      afterSwap: { outgoing: lowDb(5, swap + 1, plan.overlapBars), incoming: lowDb(4, swap + 1, plan.overlapBars) },
-    };
+    report.loudnessDeviationLu = +metrics.loudnessDeviationLu.toFixed(2);
+    report.checks = metrics.checks;
+    report.pass = metrics.pass;
   }
   let peak = 0;
   for (const c of [0, 1]) for (const v of channel(c)) peak = Math.max(peak, Math.abs(v));

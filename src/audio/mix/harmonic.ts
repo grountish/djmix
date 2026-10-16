@@ -1,6 +1,12 @@
 import { toCamelot, type MusicalKey } from '../analysis/key';
 
 /**
+ * Both keys need this confidence before automix shifts one (tags count as 1): shifting on a
+ * misread key creates the very clash it meant to fix.
+ */
+export const MIN_KEY_SHIFT_CONFIDENCE = 0.5;
+
+/**
  * How well two keys mix (0–1), on the Camelot wheel: same key, a fifth either way or the
  * relative major/minor sit well; two steps up (a tone) and seven steps (a semitone up) are
  * the classic energy lifts.

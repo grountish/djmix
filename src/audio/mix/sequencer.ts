@@ -1,6 +1,6 @@
 import type { MusicalKey } from '../analysis/key';
 import type { AudioAnalysis, Phrase } from '../analysis/types';
-import { bestKeyShift, harmonicScore, transpose } from './harmonic';
+import { bestKeyShift, harmonicScore, MIN_KEY_SHIFT_CONFIDENCE, transpose } from './harmonic';
 import { DEFAULT_TEMPO_POLICY, planTempo, type TempoPlan, type TempoPolicy } from './tempoPlan';
 
 export type TempoDirection = 'up' | 'down' | 'any';
@@ -28,7 +28,7 @@ export interface SequencerOptions {
 export const DEFAULT_SEQUENCER_OPTIONS: SequencerOptions = {
   direction: 'up',
   allowKeyShift: true,
-  minKeyShiftConfidence: 0.5,
+  minKeyShiftConfidence: MIN_KEY_SHIFT_CONFIDENCE,
   tempoPolicy: DEFAULT_TEMPO_POLICY,
 };
 
