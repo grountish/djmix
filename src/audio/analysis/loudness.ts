@@ -5,6 +5,9 @@ const STEP_SECONDS = 0.1;
 const ABSOLUTE_GATE_LUFS = -70;
 const RELATIVE_GATE_LU = -10;
 
+/** BS.1770 offset: cancels the K-filter's gain at 1 kHz so a 1 kHz sine reads its own level. */
+export const K_WEIGHTING_OFFSET_DB = -0.691;
+
 /** True-peak interpolation: 4× oversampling with a windowed-sinc kernel of this radius. */
 const OVERSAMPLE = 4;
 const KERNEL_RADIUS = 6;
@@ -16,13 +19,13 @@ export function measureLoudness(
   channels: Float32Array[],
   sampleRate: number,
 ): { integratedLufs: number; truePeakDb: number } {
-  const kWeighting = [highShelf(1500, sampleRate, 4, Math.SQRT1_2), highpass(38, sampleRate, 0.5)];
+  const filters = kWeighting(sampleRate);
   const step = Math.round(STEP_SECONDS * sampleRate);
   const steps = Math.floor(channels[0].length / step);
   const stepPower = new Float64Array(steps);
 
   for (const channel of channels) {
-    accumulateWeightedPower(channel, kWeighting, step, stepPower);
+    accumulateWeightedPower(channel, filters, step, stepPower);
   }
 
   const stepsPerBlock = Math.round(BLOCK_SECONDS / STEP_SECONDS);
@@ -33,7 +36,7 @@ export function measureLoudness(
     blockPower.push(sum / (stepsPerBlock * step));
   }
 
-  const loudness = (power: number) => -0.691 + 10 * Math.log10(power);
+  const loudness = (power: number) => K_WEIGHTING_OFFSET_DB + 10 * Math.log10(power);
   const meanPower = (powers: number[]) => powers.reduce((s, p) => s + p, 0) / powers.length;
 
   const aboveAbsolute = blockPower.filter((p) => loudness(p) > ABSOLUTE_GATE_LUFS);
@@ -51,7 +54,16 @@ export function measureLoudness(
   };
 }
 
-function accumulateWeightedPower(
+/** BS.1770 K-weighting (head shelf, then RLB high-pass) as biquads at `sampleRate`. */
+export function kWeighting(sampleRate: number): Biquad[] {
+  return [highShelf(1500, sampleRate, 4, Math.SQRT1_2), highpass(38, sampleRate, 0.5)];
+}
+
+/**
+ * Filters `channel` through `sections` (state carried across steps) and adds each step's
+ * energy (sum of squares) into `stepPower`; a trailing partial step is ignored.
+ */
+export function accumulateWeightedPower(
   channel: Float32Array,
   sections: Biquad[],
   step: number,
