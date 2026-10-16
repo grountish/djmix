@@ -16,6 +16,8 @@ interface TrackLibraryProps {
   onLoadToDeckA: (track: Track) => void;
   onLoadToDeckB: (track: Track) => void;
   onSetReference: (trackId: string | null) => void;
+  queuedIds: Set<string>;
+  onToggleQueue: (trackId: string) => void;
 }
 
 function formatDuration(seconds: number): string {
@@ -92,6 +94,8 @@ export function TrackLibrary({
   onFilterChange,
   onLoadToDeckA,
   onLoadToDeckB,
+  queuedIds,
+  onToggleQueue,
   onSetReference,
 }: TrackLibraryProps) {
   const referenceTrack = referenceTrackId ? tracks.find((t) => t.id === referenceTrackId) : null;
@@ -259,6 +263,12 @@ export function TrackLibrary({
                       </button>
                       <button className="track-action-button" onClick={() => onLoadToDeckB(track)}>
                         B
+                      </button>
+                      <button
+                        className={`track-action-button ${queuedIds.has(track.id) ? 'queued' : ''}`}
+                        onClick={() => onToggleQueue(track.id)}
+                        title={queuedIds.has(track.id) ? 'Remove from the automix queue' : 'Add to the automix queue'}>
+                        {queuedIds.has(track.id) ? '✓' : '+'}
                       </button>
                       <button
                         className="track-action-button ref-button"

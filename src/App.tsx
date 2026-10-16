@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useApp } from '@/store/AppContext';
-import { Deck, Mixer, TrackLibrary } from '@/components';
+import { Deck, Mixer, QueuePanel, TrackLibrary } from '@/components';
+import { useAutoDj } from '@/store/useAutoDj';
 import {
   importFiles,
   importFilesFromBrowser,
@@ -30,6 +31,9 @@ import '@/styles/index.css';
 
 export function App() {
   const { state, actions } = useApp();
+  useAutoDj();
+  const queuedIds = new Set(state.queue);
+  const queuedTracks = state.queue.flatMap((id) => state.tracks.filter((t) => t.id === id));
 
   const analyzeTrack = useCallback(
     async (track: Track & { _audioBuffer?: AudioBuffer }): Promise<Track> => {
@@ -302,6 +306,16 @@ export function App() {
           </div>
         </div>
 
+        <QueuePanel
+          tracks={queuedTracks}
+          direction={state.automix.direction}
+          autoEnabled={state.automix.enabled}
+          onDirectionChange={actions.setAutomixDirection}
+          onSmartOrder={actions.smartOrderQueue}
+          onMove={actions.moveInQueue}
+          onRemove={actions.removeFromQueue}
+        />
+
         <TrackLibrary
           tracks={state.tracks}
           sortOption={state.sortOption}
@@ -313,6 +327,8 @@ export function App() {
           onLoadToDeckA={(track) => actions.loadToDeck('A', track)}
           onLoadToDeckB={(track) => actions.loadToDeck('B', track)}
           onSetReference={actions.setReferenceTrack}
+          queuedIds={queuedIds}
+          onToggleQueue={(id) => (queuedIds.has(id) ? actions.removeFromQueue(id) : actions.addToQueue(id))}
         />
       </main>
 
