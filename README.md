@@ -20,6 +20,7 @@ A DJ-style track analysis and BPM-based mixing application built with Electron, 
 - **Beat Grid Analysis**: Tempo to a thousandth of a BPM, downbeats, and drifting-tempo tracking (runs in a Web Worker)
 - **Phrase Structure**: Intro / build / drop / breakdown / outro on the 8-bar grid, shown on the waveform
 - **Loudness**: Integrated LUFS and true peak per track (ITU-R BS.1770)
+- **Key**: Read from file tags (Camelot, Open Key or note names) or detected from the audio; shown as Camelot codes, with clashing keys dimmed against the reference track
 - **BPM Normalization**: Handles double-time/half-time detection errors
 - **Manual BPM Override**: Correct detected BPM when needed
 - **Track Library**: Sort and filter tracks by BPM, name, or duration
@@ -154,7 +155,7 @@ src/
 ## Known Limitations
 
 1. **Drifting Tempo Sync**: Drifting-tempo tracks are analysed, but deck sync still assumes a constant tempo
-2. **No Key Detection**: Musical key analysis not implemented
+2. **Key Detection**: Detected keys agree with tags about 57% of the time (67% counting near misses); tags win when present
 3. **No Effects**: EQ and filter only (no delay, reverb or echo-out yet)
 4. **Crossfader Curve**: Equal-power only, no curve options
 5. **No Cue Points**: Cannot set/recall cue points
@@ -173,7 +174,7 @@ src/
 ### Medium Term
 
 - [ ] Beat grid detection and display
-- [ ] Key detection (Camelot/Open Key notation)
+- [x] Key detection (Camelot/Open Key notation)
 - [ ] Crossfader curve options
 - [ ] Loop mode (set loop in/out points)
 

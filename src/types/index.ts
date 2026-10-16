@@ -1,6 +1,6 @@
 import type { AudioAnalysis } from '@/audio/analysis/types';
 
-export type { AudioAnalysis, Phrase, PhraseLabel } from '@/audio/analysis/types';
+export type { AudioAnalysis, Phrase, PhraseLabel, TrackKey } from '@/audio/analysis/types';
 export type { EqBand } from '@/audio/engine/mixGraph';
 import type { EqBand } from '@/audio/engine/mixGraph';
 
@@ -25,6 +25,10 @@ export interface Track {
   artist?: string;
   title?: string;
   album?: string;
+  /** Key as tagged in the file (Camelot, Open Key or note name). */
+  tagKey?: string;
+  /** BPM as tagged in the file. */
+  tagBpm?: number;
 }
 
 export interface TrackAnalysis extends AudioAnalysis {
@@ -97,6 +101,8 @@ export interface ElectronAPI {
     artist?: string;
     title?: string;
     album?: string;
+    tagKey?: string;
+    tagBpm?: number;
   }>;
   librarySave: (tracks: Track[]) => Promise<boolean>;
   libraryLoad: () => Promise<Track[]>;

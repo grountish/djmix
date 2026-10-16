@@ -19,6 +19,13 @@ import {
   generateSpectralWaveform,
 } from '@/audio';
 import type { Track, TrackAnalysis } from '@/types';
+import { keyFromTag } from '@/audio/analysis/key';
+
+/** A key tag in the file beats the detected key. */
+function withTaggedKey(analysis: TrackAnalysis, track: Track): TrackAnalysis {
+  const tagged = keyFromTag(track.tagKey);
+  return tagged ? { ...analysis, key: tagged } : analysis;
+}
 import '@/styles/index.css';
 
 export function App() {
@@ -32,7 +39,7 @@ export function App() {
         if (cached) {
           const fingerprint = createFileFingerprint(track);
           const cacheKey = fingerprintToKey(fingerprint);
-          const analysis = createAnalysisFromCache(cached, cacheKey);
+          const analysis = withTaggedKey(createAnalysisFromCache(cached, cacheKey), track);
           return {
             ...track,
             analysis,
@@ -50,11 +57,10 @@ export function App() {
         const fingerprint = createFileFingerprint(track);
         const cacheKey = fingerprintToKey(fingerprint);
 
-        const analysis: TrackAnalysis = {
-          ...result,
-          analyzedAt: new Date().toISOString(),
-          cacheKey,
-        };
+        const analysis = withTaggedKey(
+          { ...result, analyzedAt: new Date().toISOString(), cacheKey },
+          track,
+        );
 
         if (isElectronEnvironment()) {
           await setCachedAnalysis(track, analysis);

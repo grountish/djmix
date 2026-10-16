@@ -1,4 +1,6 @@
 import type { Track, SortOption, FilterOptions } from '@/types';
+import { harmonicScore } from '@/audio/mix/harmonic';
+import { KeyBadge } from './KeyBadge';
 
 interface TrackLibraryProps {
   tracks: Track[];
@@ -91,6 +93,7 @@ export function TrackLibrary({
 }: TrackLibraryProps) {
   const referenceTrack = referenceTrackId ? tracks.find((t) => t.id === referenceTrackId) : null;
   const referenceBpm = referenceTrack?.analysis?.manualBpm || referenceTrack?.analysis?.bpm;
+  const referenceKey = referenceTrack?.analysis?.key;
 
   let displayTracks = filterTracks(tracks, filterOptions);
 
@@ -188,6 +191,7 @@ export function TrackLibrary({
               <tr>
                 <th className="th-name">Name</th>
                 <th className="th-bpm">BPM</th>
+                <th className="th-key">Key</th>
                 <th className="th-duration">Duration</th>
                 <th className="th-load">Load</th>
               </tr>
@@ -228,6 +232,18 @@ export function TrackLibrary({
                           </>
                         )}
                       </span>
+                    </td>
+                    <td className="td-key">
+                      {track.analysis?.key && (
+                        <KeyBadge
+                          trackKey={track.analysis.key}
+                          dimmed={
+                            !!referenceKey &&
+                            track.id !== referenceTrackId &&
+                            harmonicScore(referenceKey, track.analysis.key) < 0.5
+                          }
+                        />
+                      )}
                     </td>
                     <td className="td-duration">{formatDuration(track.duration)}</td>
                     <td className="td-load">

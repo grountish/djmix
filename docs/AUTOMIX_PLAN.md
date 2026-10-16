@@ -229,3 +229,18 @@ labels on real arrangements. Deck sync for drifting tracks uses anchors in Phase
   for both modes.
 - Tests: 36 (key-lock timing via the analyzer, mid-play switch without gap or slip, pitch within
   10 cents, isolator response, knob mappings, limiter ceiling/transparency/release).
+
+### Phase 3 — done (2026-10-16)
+
+- Key tags read from files (Camelot / Open Key / note names) and preferred over detection. All
+  42 tracks of the user's playlist carry Open Key and BPM tags (written by the download tool).
+- Detector: tuning-corrected harmonic pitch-class profile (spectral peaks, 4 harmonics) against a
+  diatonic profile weighted on tonic, fifth and third. Against the 42 tags: 24 exact, 66.7%
+  weighted (Krumhansl 52%, Temperley 40%, which mostly confused relative major/minor).
+  essentia.js was not needed.
+- `mix/harmonic.ts`: Camelot compatibility score, ±1 semitone key-shift suggestion, rate→semitone.
+- UI: Camelot badges (wheel colours; italic = detected) in the library and decks; keys that clash
+  with the reference track are dimmed. `ANALYZER_VERSION = 3`.
+- Tag BPM vs analysis on the playlist: 32 equal, 4 octave apart, 6 at 3:2 or 4:3 (iguana, Calor,
+  Canto, Recorddeals, Rise N Fall, Wudang): non-four-on-the-floor rhythms, to check by ear.
+- Test files now run sequentially: the native Web Audio addon is flaky with parallel offline renders.

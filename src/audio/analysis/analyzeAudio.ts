@@ -1,5 +1,6 @@
 import { anchoredClock, constantClock } from './beatClock';
 import { fitBeatGrid } from './beatGrid';
+import { detectKey, toCamelot } from './key';
 import { findDownbeatPhase } from './downbeat';
 import { downsampleForAnalysis, toMono } from './dsp';
 import { measureLoudness } from './loudness';
@@ -27,6 +28,7 @@ export function analyzeAudio(channels: Float32Array[], sampleRate: number): Audi
   const firstBeat = Math.ceil(clock.beatAt(0) - 1e-9);
   const downbeatBeat = firstBeat + ((((downbeat.phase - firstBeat) % 4) + 4) % 4);
   const structure = analyzeStructure(spectral, clock, downbeatBeat, duration);
+  const key = detectKey(mono, sampleRate);
 
   return {
     analyzerVersion: ANALYZER_VERSION,
@@ -42,5 +44,12 @@ export function analyzeAudio(channels: Float32Array[], sampleRate: number): Audi
     bars: structure.bars,
     phrases: structure.phrases,
     loudness: measureLoudness(channels, sampleRate),
+    key: {
+      tonic: key.tonic,
+      mode: key.mode,
+      camelot: toCamelot(key),
+      confidence: Math.round(key.confidence * 100) / 100,
+      source: 'audio',
+    },
   };
 }

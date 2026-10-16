@@ -1,5 +1,6 @@
 import { useState, useRef, useCallback } from 'react';
 import type { DeckState, PlaybackMode } from '@/types';
+import { KeyBadge } from './KeyBadge';
 import { Waveform, EmptyWaveform } from './Waveform';
 
 interface DeckProps {
@@ -103,6 +104,7 @@ export function Deck({
         <div className="deck-bpm-display">
           <span className="bpm-value">{effectiveBpm ? effectiveBpm.toFixed(1) : '--'}</span>
           <span className="bpm-label">BPM</span>
+          {track?.analysis?.key && <KeyBadge trackKey={track.analysis.key} />}
           {currentBpm && currentBpm !== effectiveBpm && (
             <span className="bpm-current">{currentBpm.toFixed(1)}</span>
           )}

@@ -969,11 +969,15 @@ select {
 }
 
 .th-name {
-        width: 45%;
+        width: 40%;
 }
 
 .th-bpm {
-        width: 20%;
+        width: 15%;
+}
+
+.th-key {
+        width: 10%;
 }
 
 .th-duration {
@@ -1016,6 +1020,20 @@ select {
 
 .td-name .similarity-badge {
         margin-left: 6px;
+}
+
+.key-badge {
+        font-family: 'SF Mono', 'Menlo', 'Monaco', monospace;
+        font-size: 10px;
+        font-weight: 600;
+}
+
+.key-badge.detected {
+        font-style: italic;
+}
+
+.key-badge.dimmed {
+        opacity: 0.3;
 }
 
 .td-bpm .track-bpm {

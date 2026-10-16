@@ -18,6 +18,8 @@ interface TrackMetadata {
   artist?: string;
   title?: string;
   album?: string;
+  tagKey?: string;
+  tagBpm?: number;
 }
 
 async function extractMetadataFromFile(file: File): Promise<TrackMetadata> {
@@ -39,6 +41,8 @@ async function extractMetadataFromFile(file: File): Promise<TrackMetadata> {
       artist: metadata.common.artist,
       title: metadata.common.title,
       album: metadata.common.album,
+      tagKey: metadata.common.key,
+      tagBpm: metadata.common.bpm,
     };
   } catch (error) {
     console.error('Failed to extract metadata:', error);

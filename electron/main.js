@@ -137,6 +137,8 @@ ipcMain.handle('audio:getMetadata', async (event, filePath) => {
       artist: metadata.common.artist,
       title: metadata.common.title,
       album: metadata.common.album,
+      tagKey: metadata.common.key,
+      tagBpm: metadata.common.bpm,
     };
   } catch (error) {
     console.error('Metadata extraction error:', error);

@@ -5,8 +5,10 @@
  */
 import { readFileSync, readdirSync, statSync, writeFileSync } from 'fs';
 import { basename, extname, join } from 'path';
+import { parseFile } from 'music-metadata';
 import { OfflineAudioContext } from 'node-web-audio-api';
 import { analyzeAudio } from '../src/audio/analysis/analyzeAudio';
+import { keyFromTag } from '../src/audio/analysis/key';
 import type { AudioAnalysis } from '../src/audio/analysis/types';
 
 const AUDIO_EXTENSIONS = new Set(['.mp3', '.wav', '.flac', '.ogg', '.m4a', '.aac', '.aiff', '.aif']);
@@ -43,7 +45,7 @@ async function main(): Promise<void> {
   const results: Record<string, AudioAnalysis> = {};
 
   console.log(
-    ['track'.padEnd(36), 'bpm'.padStart(8), 'conf', 'grid', 'resid', 'beat1'.padStart(6), 'dbc', 'LUFS'.padStart(6), 'TP'.padStart(5), 'ms'.padStart(5), 'phrases'].join(' '),
+    ['track'.padEnd(36), 'bpm'.padStart(8), 'tagBpm', 'conf', 'grid', 'resid', 'beat1'.padStart(6), 'dbc', 'key', 'tagKey', 'LUFS'.padStart(6), 'TP'.padStart(5), 'ms'.padStart(5), 'phrases'].join(' '),
   );
   for (const file of files) {
     try {
@@ -52,16 +54,21 @@ async function main(): Promise<void> {
       const started = Date.now();
       const analysis = analyzeAudio(channels, buffer.sampleRate);
       const elapsed = Date.now() - started;
+      const tags = (await parseFile(file, { skipCovers: true })).common;
+      const tagKey = keyFromTag(tags.key as string | undefined)?.camelot ?? '-';
       results[basename(file)] = analysis;
       console.log(
         [
           basename(file, extname(file)).slice(0, 36).padEnd(36),
           analysis.bpm.toFixed(3).padStart(8),
+          String(tags.bpm ?? '-').padStart(6),
           analysis.bpmConfidence.toFixed(2),
           analysis.tempo.isConstant ? 'const' : 'VAR  ',
           analysis.tempo.residualMs.toFixed(1).padStart(5),
           analysis.firstBeatTime.toFixed(3).padStart(6),
           analysis.downbeatConfidence.toFixed(2),
+          analysis.key.camelot.padStart(3),
+          tagKey.padStart(6),
           analysis.loudness.integratedLufs.toFixed(1).padStart(6),
           analysis.loudness.truePeakDb.toFixed(1).padStart(5),
           String(elapsed).padStart(5),

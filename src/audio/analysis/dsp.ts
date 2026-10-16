@@ -88,14 +88,9 @@ export function toMono(channels: Float32Array[]): Float32Array {
   return mono;
 }
 
-/** Integer-factor decimation to roughly 22 kHz with a zero-phase anti-alias filter. */
-export function downsampleForAnalysis(
-  x: Float32Array,
-  sampleRate: number,
-): { samples: Float32Array; sampleRate: number } {
-  const factor = Math.max(1, Math.round(sampleRate / 22050));
-  if (factor === 1) return { samples: x, sampleRate };
-
+/** Integer-factor decimation with a zero-phase anti-alias filter. */
+export function decimate(x: Float32Array, sampleRate: number, factor: number): Float32Array {
+  if (factor <= 1) return x;
   const cutoff = (0.45 * sampleRate) / factor;
   const filtered = filtfilt(
     x,
@@ -103,7 +98,16 @@ export function downsampleForAnalysis(
   );
   const out = new Float32Array(Math.floor(filtered.length / factor));
   for (let i = 0; i < out.length; i++) out[i] = filtered[i * factor];
-  return { samples: out, sampleRate: sampleRate / factor };
+  return out;
+}
+
+/** Decimation to roughly 22 kHz for spectral analysis. */
+export function downsampleForAnalysis(
+  x: Float32Array,
+  sampleRate: number,
+): { samples: Float32Array; sampleRate: number } {
+  const factor = Math.max(1, Math.round(sampleRate / 22050));
+  return { samples: decimate(x, sampleRate, factor), sampleRate: sampleRate / factor };
 }
 
 /**

@@ -1,5 +1,5 @@
 /** Bumped whenever analysis output changes, so cached results are recomputed. */
-export const ANALYZER_VERSION = 2;
+export const ANALYZER_VERSION = 3;
 
 export type PhraseLabel = 'intro' | 'build' | 'drop' | 'breakdown' | 'outro';
 
@@ -48,4 +48,16 @@ export interface AudioAnalysis {
     integratedLufs: number;
     truePeakDb: number;
   };
+  key: TrackKey;
+}
+
+export interface TrackKey {
+  /** Pitch class of the tonic, C = 0. */
+  tonic: number;
+  mode: 'major' | 'minor';
+  /** Camelot wheel code, e.g. "8A". */
+  camelot: string;
+  /** Margin over the next-best key (0–1); tags count as 1. */
+  confidence: number;
+  source: 'tag' | 'audio';
 }
