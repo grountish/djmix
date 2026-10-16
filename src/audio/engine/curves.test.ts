@@ -1,26 +1,23 @@
 import { describe, expect, it } from 'vitest';
-import { eqKnobToGain, equalPowerGains, filterKnobToCutoffs } from './curves';
+import { crossfaderGains, eqKnobToGain, filterKnobToCutoffs } from './curves';
 
-describe('equalPowerGains', () => {
-  it('gives full A, centre and full B at the ends and middle', () => {
-    expect(equalPowerGains(-1).a).toBeCloseTo(1, 12);
-    expect(equalPowerGains(-1).b).toBeCloseTo(0, 12);
-    expect(equalPowerGains(0).a).toBeCloseTo(Math.SQRT1_2, 12);
-    expect(equalPowerGains(0).b).toBeCloseTo(Math.SQRT1_2, 12);
-    expect(equalPowerGains(1).a).toBeCloseTo(0, 12);
-    expect(equalPowerGains(1).b).toBeCloseTo(1, 12);
+describe('crossfaderGains', () => {
+  it('plays both decks at full level in the centre and one at each side', () => {
+    expect(crossfaderGains(0)).toEqual({ a: 1, b: 1 });
+    expect(crossfaderGains(-1).a).toBe(1);
+    expect(crossfaderGains(-1).b).toBeCloseTo(0, 12);
+    expect(crossfaderGains(1).a).toBeCloseTo(0, 12);
+    expect(crossfaderGains(1).b).toBe(1);
   });
 
-  it('keeps total power constant across the whole throw', () => {
-    for (let position = -1; position <= 1; position += 0.05) {
-      const { a, b } = equalPowerGains(position);
-      expect(a * a + b * b).toBeCloseTo(1, 12);
-    }
+  it('fades the far deck along a quarter cosine', () => {
+    expect(crossfaderGains(0.5).a).toBeCloseTo(Math.SQRT1_2, 12);
+    expect(crossfaderGains(-0.5).b).toBeCloseTo(Math.SQRT1_2, 12);
   });
 
   it('clamps positions outside -1..1', () => {
-    expect(equalPowerGains(-3)).toEqual(equalPowerGains(-1));
-    expect(equalPowerGains(3)).toEqual(equalPowerGains(1));
+    expect(crossfaderGains(-3)).toEqual(crossfaderGains(-1));
+    expect(crossfaderGains(3)).toEqual(crossfaderGains(1));
   });
 });
 

@@ -135,7 +135,7 @@ describe('offline mix engine', () => {
 
     const out = await mix.ctx.startRendering();
     const deckA = out.getChannelData(0);
-    const expectedLevel = 0.5 * Math.SQRT1_2; // fader × centred crossfader
+    const expectedLevel = 0.5; // fader × centred crossfader (unity)
     const levelHolds = (from: number, to: number) => {
       for (let i = Math.round(from * SAMPLE_RATE); i < Math.round(to * SAMPLE_RATE); i++) {
         if (Math.abs(deckA[i] - expectedLevel) >= 1e-3) return false;
@@ -150,7 +150,7 @@ describe('offline mix engine', () => {
     expect(levelHolds(2.1, 3)).toBe(true);
   });
 
-  it('runs an equal-power crossfade on the audio clock', async () => {
+  it('runs a crossfader sweep on the audio clock', async () => {
     const mix = createTappedMix(3);
     await mix.decks.A.load(constant(mix.ctx, 1, 10));
     await mix.decks.B.load(constant(mix.ctx, 1, 10));
@@ -169,14 +169,15 @@ describe('offline mix engine', () => {
 
     expect(sampleAt(deckA, 0.75)).toBeCloseTo(1, 3);
     expect(sampleAt(deckB, 0.75)).toBeCloseTo(0, 3);
-    expect(sampleAt(deckA, 1.5)).toBeCloseTo(Math.SQRT1_2, 2);
-    expect(sampleAt(deckB, 1.5)).toBeCloseTo(Math.SQRT1_2, 2);
+    expect(sampleAt(deckB, 1.25)).toBeCloseTo(Math.SQRT1_2, 2);
+    expect(sampleAt(deckA, 1.5)).toBeCloseTo(1, 2);
+    expect(sampleAt(deckB, 1.5)).toBeCloseTo(1, 2);
+    expect(sampleAt(deckA, 1.75)).toBeCloseTo(Math.SQRT1_2, 2);
     expect(sampleAt(deckA, 2.5)).toBeCloseTo(0, 3);
     expect(sampleAt(deckB, 2.5)).toBeCloseTo(1, 3);
+    // The louder deck never dips during the sweep.
     for (let t = 1; t <= 2; t += 0.01) {
-      const a = sampleAt(deckA, t);
-      const b = sampleAt(deckB, t);
-      expect(a * a + b * b).toBeCloseTo(1, 3);
+      expect(Math.max(sampleAt(deckA, t), sampleAt(deckB, t))).toBeGreaterThan(0.99);
     }
   });
 });

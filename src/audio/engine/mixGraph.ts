@@ -1,4 +1,4 @@
-import { eqKnobToGain, equalPowerGains, filterKnobToCutoffs } from './curves';
+import { eqKnobToGain, crossfaderGains, filterKnobToCutoffs } from './curves';
 
 export type DeckId = 'A' | 'B';
 
@@ -38,7 +38,7 @@ const FILTER_Q_DB = 1;
 /** Time constant for UI-driven moves: removes zipper noise, still feels instant. */
 const PARAM_SMOOTHING = 0.01;
 
-/** Points per scheduled crossfade curve; plenty for a smooth equal-power sweep. */
+/** Points per scheduled crossfade curve; plenty for a smooth sweep. */
 const CROSSFADE_CURVE_POINTS = 256;
 
 /**
@@ -65,7 +65,7 @@ export function createMixGraph(
   };
 
   const decks = { A: createChannel(), B: createChannel() };
-  const centre = equalPowerGains(0);
+  const centre = crossfaderGains(0);
   decks.A.crossfade.gain.value = centre.a;
   decks.B.crossfade.gain.value = centre.b;
 
@@ -127,13 +127,13 @@ export function setParamSmooth(param: AudioParam, value: number, ctx: BaseAudioC
 }
 
 export function setCrossfaderPosition(graph: MixGraph, position: number): void {
-  const { a, b } = equalPowerGains(position);
+  const { a, b } = crossfaderGains(position);
   setParamSmooth(graph.decks.A.crossfade.gain, a, graph.ctx);
   setParamSmooth(graph.decks.B.crossfade.gain, b, graph.ctx);
 }
 
 /**
- * Schedules an equal-power crossfader sweep on the audio clock. The crossfader holds its
+ * Schedules a crossfader sweep on the audio clock. The crossfader holds its
  * current level until `startTime`, then follows the curve sample-accurately.
  */
 export function scheduleCrossfade(
@@ -147,7 +147,7 @@ export function scheduleCrossfade(
   const curveB = new Float32Array(CROSSFADE_CURVE_POINTS);
   for (let i = 0; i < CROSSFADE_CURVE_POINTS; i++) {
     const position = from + ((to - from) * i) / (CROSSFADE_CURVE_POINTS - 1);
-    const { a, b } = equalPowerGains(position);
+    const { a, b } = crossfaderGains(position);
     curveA[i] = a;
     curveB[i] = b;
   }

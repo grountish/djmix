@@ -3,14 +3,15 @@ export function clamp(value: number, min: number, max: number): number {
 }
 
 /**
- * Equal-power crossfader law: -1 = full A, 0 = centre (both at -3 dB), 1 = full B.
- * a² + b² = 1 at every position, so uncorrelated material keeps constant loudness through a fade.
+ * Crossfader law: -1 = full A, 0 = centre, 1 = full B. Both decks play at full level in the
+ * centre (automix blends with the channel faders and EQ there); towards a side the other deck
+ * fades out along a quarter cosine.
  */
-export function equalPowerGains(position: number): { a: number; b: number } {
-  const t = (clamp(position, -1, 1) + 1) / 2;
+export function crossfaderGains(position: number): { a: number; b: number } {
+  const x = clamp(position, -1, 1);
   return {
-    a: Math.cos((t * Math.PI) / 2),
-    b: Math.sin((t * Math.PI) / 2),
+    a: x <= 0 ? 1 : Math.cos((x * Math.PI) / 2),
+    b: x >= 0 ? 1 : Math.cos((-x * Math.PI) / 2),
   };
 }
 

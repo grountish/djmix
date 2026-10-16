@@ -125,11 +125,20 @@ export class DeckPlayer {
   }
 
   setRate(rate: number): void {
+    this.scheduleRate(this.nextChangeTime(), rate);
+  }
+
+  /**
+   * Changes the rate at audio-clock time `at`, rounded up to a render-quantum edge so the
+   * playhead math stays exact; returns the time used. Callers schedule one change at a time,
+   * at least the path's lead ahead (the stretcher keeps a single pending change).
+   */
+  scheduleRate(time: number, rate: number): number {
+    const at = alignToRenderQuantum(time, this.ctx.sampleRate);
     this.rate = rate;
-    if (!this.playing) return;
+    if (!this.playing) return at;
 
     const now = this.ctx.currentTime;
-    const at = this.nextChangeTime();
     while (this.anchors.length > 1 && this.anchors[1].ctxTime <= now) this.anchors.shift();
     const last = this.anchors[this.anchors.length - 1];
     const rebased = rebaseAnchor(last, at, rate);
@@ -145,6 +154,7 @@ export class DeckPlayer {
       // can round to just after it and slip a whole block, so place it half a frame early.
       this.source.playbackRate.setValueAtTime(rate, at - 0.5 / this.ctx.sampleRate);
     }
+    return at;
   }
 
   /** Key lock keeps pitch while the tempo changes; needs a stretch factory. */
