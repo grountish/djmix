@@ -123,11 +123,16 @@ function reducer(state: AppState, action: Action): AppState {
     case 'ADD_TRACKS':
       return { ...state, tracks: mergeTracks(state.tracks, action.tracks) };
 
-    case 'UPDATE_TRACK':
+    case 'UPDATE_TRACK': {
+      // Decks hold their own copy of the track: an analysis finishing after the load reaches them too.
+      const deck = (d: DeckState): DeckState => (d.track?.id === action.track.id ? { ...d, track: action.track } : d);
       return {
         ...state,
         tracks: state.tracks.map((t) => (t.id === action.track.id ? action.track : t)),
+        deckA: deck(state.deckA),
+        deckB: deck(state.deckB),
       };
+    }
 
     case 'SET_TRACK_OVERRIDES': {
       // Decks hold their own copy of the track: update it too so they redraw at once.
