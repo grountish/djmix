@@ -70,9 +70,8 @@ button:disabled {
   cursor: default;
 }
 
-input[type='text'],
-input[type='search'],
-input[type='number'] {
+/* :where() keeps these at zero specificity so a single class (.deck-target, .channel-fader, .pitch-slider) can override them */
+:where(input[type='text'], input[type='search'], input[type='number']) {
   background: #0f0f0f;
   border: 1px solid var(--line);
   color: var(--text);
@@ -109,7 +108,7 @@ select {
 }
 
 /* Range inputs: flat tracks, squared thumbs */
-input[type='range'] {
+:where(input[type='range']) {
   -webkit-appearance: none;
   appearance: none;
   background: transparent;
@@ -118,19 +117,19 @@ input[type='range'] {
   cursor: pointer;
 }
 
-input[type='range']:disabled {
+:where(input[type='range']):disabled {
   opacity: 0.35;
   cursor: default;
 }
 
-input[type='range']::-webkit-slider-runnable-track {
+:where(input[type='range'])::-webkit-slider-runnable-track {
   height: 4px;
   background: #0a0a0a;
   border: 1px solid #383838;
   border-radius: 2px;
 }
 
-input[type='range']::-webkit-slider-thumb {
+:where(input[type='range'])::-webkit-slider-thumb {
   -webkit-appearance: none;
   width: 10px;
   height: 18px;
@@ -141,7 +140,7 @@ input[type='range']::-webkit-slider-thumb {
   box-shadow: inset 0 0 0 1px #6a6a6a;
 }
 
-input[type='range']:hover::-webkit-slider-thumb {
+:where(input[type='range']):hover::-webkit-slider-thumb {
   background: linear-gradient(#6a6a6a, #444);
 }
 
@@ -563,10 +562,21 @@ input[type='range']:hover::-webkit-slider-thumb {
 
 .deck-target {
   width: 56px;
-  height: 24px;
+  height: 26px;
+  padding: 0 6px;
+  border-color: var(--line-2);
   font-size: 10px;
   text-align: center;
   font-family: var(--mono);
+}
+
+.deck-target::placeholder {
+  color: var(--text-3);
+  font-family: inherit;
+  font-weight: 700;
+  font-size: 10px;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
 }
 
 /* Analysis corrections row (tempo octave, grid, downbeat, key) */
