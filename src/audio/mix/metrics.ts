@@ -1,11 +1,12 @@
-import { BUTTERWORTH4_Q, filtfilt, lowpass, median, percentile, powerToDb } from '../analysis/dsp';
+import { BUTTERWORTH4_Q, filtfilt, highpass, lowpass, median, percentile, powerToDb } from '../analysis/dsp';
 import {
   K_WEIGHTING_OFFSET_DB,
   accumulateWeightedPower,
   kWeighting,
   measureLoudness,
 } from '../analysis/loudness';
-import { LOW_MID_CROSSOVER } from '../analysis/spectrum';
+import { LOW_MID_CROSSOVER, MID_HIGH_CROSSOVER } from '../analysis/spectrum';
+import { type BalanceReport, type Band, BANDS } from './balance';
 
 /**
  * Transition quality metrics measured on an offline render: kick alignment between the decks,
@@ -22,6 +23,10 @@ export interface TransitionTargets {
   maxLoudnessDeviationLu: number;
   /** Highest master sample peak, dBFS. */
   maxPeakDb: number;
+  /** Largest amount a band may measure above the plan's reference level, dB. */
+  maxStackingDb: number;
+  /** Deepest a band may measure below the plan's reference level, dB. */
+  maxHoleDb: number;
 }
 
 /** Phase 4 exit criteria (docs/AUTOMIX_PLAN.md). */
@@ -30,6 +35,8 @@ export const TRANSITION_TARGETS: TransitionTargets = {
   lowBandThresholdDb: -15,
   maxLoudnessDeviationLu: 1,
   maxPeakDb: -1,
+  maxStackingDb: 3,
+  maxHoleDb: 6,
 };
 
 // Kick envelope parameters copied from the analyzer (beatGrid.ts) so a measured offset of zero
@@ -390,6 +397,340 @@ export function samplePeakDb(channels: Float32Array[]): number {
   return powerToDb(peak * peak);
 }
 
+/*
+ * Grid-free timing. The alignment above reads kicks around *expected* beats, so it inherits
+ * each track's grid: a grid half a beat off puts that deck's kicks outside the search window
+ * and they are quietly skipped (that is how an out-of-sync mix once measured as locked). The
+ * phase offset below uses only the beat period, never a grid phase.
+ */
+
+/** Local maxima of the kick envelope are looked for over ±this window (s). */
+const ONSET_PEAK_WINDOW = 0.06;
+/** The floor before a peak is the minimum over this long before it (s). */
+const ONSET_FLOOR_WINDOW = 0.12;
+/** Onsets closer than this are one event (s). */
+const ONSET_MIN_GAP = 0.06;
+/**
+ * A kick's low band decays within a fifth of a second; a bass note holds. The envelope over
+ * the hit (s after the onset) must sit this far above its tail for an onset to be a kick —
+ * the analyzer's own discriminator (beatGrid.ts), so bass notes between kicks don't count.
+ */
+const ONSET_DECAY_EARLY: [number, number] = [0.005, 0.045];
+const ONSET_DECAY_LATE: [number, number] = [0.12, 0.2];
+const MIN_ONSET_DECAY_DB = 3;
+
+interface LowOnset {
+  time: number;
+  peak: number;
+}
+
+/**
+ * Kick onsets of a mono signal between `from` and `to`, found without a beat grid: peaks of
+ * the low-band envelope that rise clearly (MIN_KICK_PUNCH) out of what came before them,
+ * reach the signal's typical kick level and decay like a kick, read at their 50% rise point
+ * like the analyzer's beats.
+ */
+function pickLowOnsets(signal: Float32Array, sampleRate: number, from: number, to: number): LowOnset[] {
+  const { values, rate } = kickEnvelope(signal, sampleRate);
+  const peakHalf = Math.max(1, Math.round(ONSET_PEAK_WINDOW * rate));
+  const floorWindow = Math.max(1, Math.round(ONSET_FLOOR_WINDOW * rate));
+  const first = Math.max(peakHalf, Math.floor(from * rate));
+  const last = Math.min(values.length - peakHalf - 1, Math.ceil(to * rate));
+  const meanOver = (start: number, window: [number, number]) => {
+    const a = Math.min(values.length, Math.max(0, Math.round(start + window[0] * rate)));
+    const b = Math.min(values.length, Math.max(a + 1, Math.round(start + window[1] * rate)));
+    let sum = 0;
+    for (let j = a; j < b; j++) sum += values[j];
+    return sum / (b - a);
+  };
+
+  const candidates: LowOnset[] = [];
+  for (let i = first; i <= last; i++) {
+    const v = values[i];
+    if (v <= 0) continue;
+    let isPeak = true;
+    for (let j = i - peakHalf; j <= i + peakHalf && isPeak; j++) {
+      if (values[j] > v || (values[j] === v && j < i)) isPeak = false;
+    }
+    if (!isPeak) continue;
+    let floor = v;
+    for (let j = Math.max(0, i - floorWindow); j < i; j++) floor = Math.min(floor, values[j]);
+    const level = floor + 0.5 * (v - floor);
+    if (!(level > floor)) continue;
+    let k = i;
+    while (k > 0 && values[k - 1] >= level) k--;
+    const crossing = k === 0 ? 0 : k - 1 + (level - values[k - 1]) / (values[k] - values[k - 1]);
+    const before = meanOver(crossing, [-PRE_ONSET_FROM, -PRE_ONSET_TO]);
+    if (v < MIN_KICK_PUNCH * before) continue;
+    const early = meanOver(crossing, ONSET_DECAY_EARLY);
+    const late = meanOver(crossing, ONSET_DECAY_LATE);
+    if (!(early > 0) || powerToDb(early) - powerToDb(late) < MIN_ONSET_DECAY_DB) continue;
+    candidates.push({ time: crossing / rate, peak: v });
+  }
+  if (candidates.length === 0) return [];
+
+  const minPeak =
+    percentile(candidates.map((c) => c.peak), KICK_REFERENCE_PERCENTILE) * Math.pow(10, MIN_KICK_LEVEL_DB / 10);
+  const onsets: LowOnset[] = [];
+  for (const candidate of candidates) {
+    if (candidate.peak < minPeak) continue;
+    if (onsets.length > 0 && candidate.time - onsets[onsets.length - 1].time < ONSET_MIN_GAP) continue;
+    onsets.push(candidate);
+  }
+  return onsets;
+}
+
+/** Kick onset times (seconds) of a mono signal, found without a beat grid (see pickLowOnsets). */
+export function lowOnsets(signal: Float32Array, sampleRate: number, from = 0, to = Infinity): number[] {
+  return pickLowOnsets(signal, sampleRate, from, to).map((onset) => onset.time);
+}
+
+export interface PhaseOffset {
+  /**
+   * Lag of b's low-band rhythm behind a's within ±half a beat period, ms: the kick offset
+   * between the decks. NaN when the two envelopes don't correlate enough to tell.
+   */
+  offsetMs: number;
+  /** Normalised peak correlation of the two envelopes (0–1): how sure the offset is. */
+  correlation: number;
+  /** Resultant length (0–1) of each deck's onset phases: 1 = every kick on one phase of the period. */
+  coherence: { a: number; b: number };
+  onsets: { a: number; b: number };
+}
+
+/** Below this normalised correlation the two decks share no rhythm to read a lag from. */
+const MIN_LAG_CORRELATION = 0.2;
+
+/**
+ * Kick offset between two decks read from the beat period alone: the lag, within ±half a
+ * period, at which the two low-band envelopes correlate best. No grid phase, no expected
+ * beats and no onset classification are involved, so a bass line under the kicks does not
+ * bias it, and a deck whose kicks sit half a beat off the other's reads as ±period/2 — which
+ * the grid-based alignment cannot see. The onset fold supplies how regular each deck's kicks
+ * are and how many there were.
+ */
+export function kickPhaseOffset(
+  a: Float32Array,
+  b: Float32Array,
+  sampleRate: number,
+  periodSeconds: number,
+  from = 0,
+  to = Infinity,
+): PhaseOffset {
+  const lag = envelopeLag(a, b, sampleRate, periodSeconds / 2, from, to);
+  // Onsets vote with their strength, so a stray soft event cannot pull the phase.
+  const fold = (onsets: LowOnset[]) => {
+    let re = 0;
+    let im = 0;
+    let weight = 0;
+    for (const { time, peak } of onsets) {
+      const phase = (2 * Math.PI * (time - from)) / periodSeconds;
+      re += peak * Math.cos(phase);
+      im += peak * Math.sin(phase);
+      weight += peak;
+    }
+    return weight > 0 ? Math.hypot(re, im) / weight : 0;
+  };
+  const onsetsA = pickLowOnsets(a, sampleRate, from, to);
+  const onsetsB = pickLowOnsets(b, sampleRate, from, to);
+  return {
+    offsetMs: lag.correlation >= MIN_LAG_CORRELATION ? lag.lagSeconds * 1000 : NaN,
+    correlation: lag.correlation,
+    coherence: { a: fold(onsetsA), b: fold(onsetsB) },
+    onsets: { a: onsetsA.length, b: onsetsB.length },
+  };
+}
+
+/**
+ * Lag (seconds, b behind a) within ±maxLag at which the two signals' kick envelopes, mean
+ * removed over [from, to], correlate best, refined to a fraction of an envelope sample, and
+ * the normalised correlation there.
+ */
+function envelopeLag(
+  a: Float32Array,
+  b: Float32Array,
+  sampleRate: number,
+  maxLagSeconds: number,
+  from: number,
+  to: number,
+): { lagSeconds: number; correlation: number } {
+  const envA = kickEnvelope(a, sampleRate);
+  const envB = kickEnvelope(b, sampleRate);
+  const rate = envA.rate;
+  const start = Math.max(0, Math.floor(from * rate));
+  const end = Math.min(envA.values.length, envB.values.length, Math.ceil(to * rate));
+  const maxLag = Math.max(1, Math.round(maxLagSeconds * rate));
+  const length = end - start - 2 * maxLag;
+  if (length < 2) return { lagSeconds: NaN, correlation: 0 };
+
+  // a over the inner window; b slides over it by the lag.
+  const centre = (values: Float32Array, offset: number) => {
+    let mean = 0;
+    for (let i = 0; i < length; i++) mean += values[offset + i];
+    mean /= length;
+    const out = new Float64Array(length);
+    for (let i = 0; i < length; i++) out[i] = values[offset + i] - mean;
+    return out;
+  };
+  const windowA = centre(envA.values, start + maxLag);
+  const normA = Math.sqrt(windowA.reduce((sum, v) => sum + v * v, 0));
+  const scores = new Float64Array(2 * maxLag + 1);
+  let best = 0;
+  for (let lag = -maxLag; lag <= maxLag; lag++) {
+    const windowB = centre(envB.values, start + maxLag + lag);
+    let dot = 0;
+    let normB = 0;
+    for (let i = 0; i < length; i++) {
+      dot += windowA[i] * windowB[i];
+      normB += windowB[i] * windowB[i];
+    }
+    const score = normA > 0 && normB > 0 ? dot / (normA * Math.sqrt(normB)) : 0;
+    scores[lag + maxLag] = score;
+    if (score > scores[best]) best = lag + maxLag;
+  }
+  const correlation = scores[best];
+  if (!(correlation > 0)) return { lagSeconds: NaN, correlation: 0 };
+  const refined =
+    best > 0 && best < scores.length - 1 ? best + parabolicPeak(scores[best - 1], scores[best], scores[best + 1]) : best;
+  return { lagSeconds: (refined - maxLag) / rate, correlation };
+}
+
+/** Offset (−0.5 … 0.5 samples) of the parabola through three neighbouring values' peak. */
+function parabolicPeak(left: number, centre: number, right: number): number {
+  const denominator = left - 2 * centre + right;
+  return denominator < 0 ? Math.max(-0.5, Math.min(0.5, (0.5 * (left - right)) / denominator)) : 0;
+}
+
+export interface BandLevels {
+  outgoing: Record<Band, number[]>;
+  incoming: Record<Band, number[]>;
+  /** Both decks together (power sum), dB. */
+  sum: Record<Band, number[]>;
+}
+
+/**
+ * Per bar (barTimes[k] … barTimes[k+1]), each deck's level in the isolator's three bands after
+ * its fader, dB, and the two together. The same crossovers as the mixer and the analysis, so
+ * these compare with a plan's forecast.
+ */
+export function bandLevels(
+  taps: { outgoing: Float32Array; incoming: Float32Array },
+  sampleRate: number,
+  barTimes: number[],
+): BandLevels {
+  const butterworth = (make: (q: number) => ReturnType<typeof lowpass>) => BUTTERWORTH4_Q.map(make);
+  const split = (signal: Float32Array): Record<Band, Float32Array> => {
+    const upper = filtfilt(signal, butterworth((q) => highpass(LOW_MID_CROSSOVER, sampleRate, q)));
+    return {
+      low: filtfilt(signal, butterworth((q) => lowpass(LOW_MID_CROSSOVER, sampleRate, q))),
+      mid: filtfilt(upper, butterworth((q) => lowpass(MID_HIGH_CROSSOVER, sampleRate, q))),
+      high: filtfilt(upper, butterworth((q) => highpass(MID_HIGH_CROSSOVER, sampleRate, q))),
+    };
+  };
+  const barPower = (x: Float32Array, k: number) => {
+    const start = Math.max(0, Math.round(barTimes[k] * sampleRate));
+    const end = Math.min(x.length, Math.round(barTimes[k + 1] * sampleRate));
+    let sum = 0;
+    for (let i = start; i < end; i++) sum += x[i] * x[i];
+    return end > start ? sum / (end - start) : 0;
+  };
+  const out = split(taps.outgoing);
+  const inc = split(taps.incoming);
+  const levels: BandLevels = {
+    outgoing: { low: [], mid: [], high: [] },
+    incoming: { low: [], mid: [], high: [] },
+    sum: { low: [], mid: [], high: [] },
+  };
+  for (const band of BANDS) {
+    for (let k = 0; k + 1 < barTimes.length; k++) {
+      const pOut = barPower(out[band], k);
+      const pIn = barPower(inc[band], k);
+      levels.outgoing[band].push(powerToDb(pOut));
+      levels.incoming[band].push(powerToDb(pIn));
+      levels.sum[band].push(powerToDb(pOut + pIn));
+    }
+  }
+  return levels;
+}
+
+/** Bars at the start of the overlap, where only the outgoing deck plays, that calibrate the forecast. */
+const CALIBRATION_BARS = 2;
+
+export interface ForecastCheck {
+  /** Per band: dB added to the forecast to put it on the render's scale (measured over the first bars). */
+  calibrationDb: Record<Band, number>;
+  /** Per band and bar: measured sum minus the forecast's balanced sum, dB. */
+  errorDb: Record<Band, number[]>;
+  rmsErrorDb: number;
+  maxAbsErrorDb: number;
+  /** Largest amount the measured sum rises above the forecast's reference, dB: stacking the ear gets. */
+  measuredExcessDb: number;
+  /** Deepest the measured sum falls below the reference, dB: a hole the ear gets. */
+  measuredHoleDb: number;
+}
+
+/**
+ * The plan's forecast against what the render measured, band by band and bar by bar. The
+ * analysis and the render count level on different scales, so each band is calibrated on
+ * the overlap's first bars, where the outgoing deck plays alone at unity.
+ */
+export function checkForecast(levels: BandLevels, forecast: BalanceReport): ForecastCheck {
+  const bars = levels.sum.low.length;
+  const calibrationDb = {} as Record<Band, number>;
+  const errorDb = {} as Record<Band, number[]>;
+  let squares = 0;
+  let count = 0;
+  let maxAbs = 0;
+  let excess = 0;
+  let hole = 0;
+  const finite = (v: number | undefined): v is number => v !== undefined && Number.isFinite(v);
+  // A measured bar spans [b, b+1); the forecast gives instants, so take its mid-bar value.
+  const midBar = (series: number[], b: number) => {
+    const here = series[b];
+    const next = series[b + 1];
+    return finite(here) && finite(next) ? (here + next) / 2 : finite(here) ? here : NaN;
+  };
+
+  for (const band of BANDS) {
+    let offsets = 0;
+    let n = 0;
+    for (let b = 0; b < Math.min(CALIBRATION_BARS, bars); b++) {
+      const measured = levels.outgoing[band][b];
+      const predicted = midBar(forecast.levels.outgoing[band], b);
+      if (finite(measured) && finite(predicted) && measured > -100 && predicted > -100) {
+        offsets += measured - predicted;
+        n++;
+      }
+    }
+    const calibration = n > 0 ? offsets / n : 0;
+    calibrationDb[band] = calibration;
+    errorDb[band] = [];
+    for (let b = 0; b < bars; b++) {
+      const measured = levels.sum[band][b];
+      const predicted = midBar(forecast.bands[band].balanced, b) + calibration;
+      const reference = midBar(forecast.bands[band].reference, b) + calibration;
+      const error = finite(measured) && finite(predicted) ? measured - predicted : NaN;
+      errorDb[band].push(error);
+      if (b === 0 || b === bars - 1 || !finite(error)) continue;
+      squares += error * error;
+      count++;
+      maxAbs = Math.max(maxAbs, Math.abs(error));
+      if (finite(reference)) {
+        excess = Math.max(excess, measured - reference);
+        hole = Math.max(hole, reference - measured);
+      }
+    }
+  }
+  return {
+    calibrationDb,
+    errorDb,
+    rmsErrorDb: count > 0 ? Math.sqrt(squares / count) : NaN,
+    maxAbsErrorDb: count > 0 ? maxAbs : NaN,
+    measuredExcessDb: count > 0 ? excess : NaN,
+    measuredHoleDb: count > 0 ? hole : NaN,
+  };
+}
+
 /** One offline-rendered transition, all signals on the same timeline. */
 export interface RenderedTransition {
   sampleRate: number;
@@ -404,6 +745,12 @@ export interface RenderedTransition {
   overlapEnd: number;
   /** Indices into `overlapBeatTimes` where both lows may play (the bass-swap beat). */
   allowedCollisionBeats?: number[];
+  /** Beat period during the overlap (the meeting tempo), seconds: enables the grid-free phase offset. */
+  periodSeconds?: number;
+  /** Clock time of every overlap bar line, 0 … overlapBars: enables the band-level check. */
+  barTimes?: number[];
+  /** The plan's forecast (`plan.balance`): enables the forecast check. */
+  forecast?: BalanceReport;
 }
 
 /** Fewer beats with a clear kick on both decks than this can't tell timing from noise. */
@@ -412,13 +759,22 @@ export const MIN_ALIGNED_BEATS = 8;
 export interface TransitionChecks {
   /** null when too few beats had a clear kick on both decks to judge. */
   beatAlignment: boolean | null;
+  /** Grid-free kick phase offset within the target; null without a usable phase (or no period given). */
+  phase: boolean | null;
   lowBand: boolean;
-  loudness: boolean;
+  /** Short-term loudness within the target of the overlap's median; null (advisory) with a forecast. */
+  loudness: boolean | null;
   peak: boolean;
+  /** No band measured above the plan's reference by more than the target; null without a forecast. */
+  stacking: boolean | null;
+  /** No band measured below the plan's reference by more than the target; null without a forecast. */
+  hole: boolean | null;
 }
 
 export interface TransitionMetrics {
   alignment: BeatAlignment;
+  /** Kick offset read from the beat period alone (see kickPhaseOffset); absent without a period. */
+  phase?: PhaseOffset;
   collisions: LowBandCollisions;
   /** Collision beats outside `allowedCollisionBeats`. */
   unexpectedCollisionBeats: number[];
@@ -427,6 +783,10 @@ export interface TransitionMetrics {
   samplePeakDb: number;
   /** 4× oversampled (BS.1770); informational, the check uses the sample peak. */
   truePeakDb: number;
+  /** Measured band levels per overlap bar; absent without bar times. */
+  bands?: BandLevels;
+  /** The forecast against the render; absent without a forecast and bar times. */
+  forecast?: ForecastCheck;
   checks: TransitionChecks;
   pass: boolean;
 }
@@ -441,6 +801,10 @@ export function summarizeTransition(
 ): TransitionMetrics {
   const { sampleRate, overlapBeatTimes, timingTaps, levelTaps, master } = input;
   const alignment = beatAlignment(timingTaps.outgoing, timingTaps.incoming, sampleRate, overlapBeatTimes);
+  const phase =
+    input.periodSeconds !== undefined
+      ? kickPhaseOffset(timingTaps.outgoing, timingTaps.incoming, sampleRate, input.periodSeconds, input.overlapStart, input.overlapEnd)
+      : undefined;
   const collisions = lowBandCollisions(
     levelTaps.outgoing,
     levelTaps.incoming,
@@ -453,22 +817,32 @@ export function summarizeTransition(
   const loudness = shortTermLoudness(master, sampleRate);
   const loudnessDeviationLu = loudnessDeviation(loudness, input.overlapStart, input.overlapEnd);
   const peakDb = samplePeakDb(master);
+  const bands = input.barTimes && input.barTimes.length > 1 ? bandLevels(levelTaps, sampleRate, input.barTimes) : undefined;
+  const forecast = bands && input.forecast ? checkForecast(bands, input.forecast) : undefined;
 
   const checks: TransitionChecks = {
     beatAlignment:
       alignment.summary.count < MIN_ALIGNED_BEATS ? null : alignment.summary.maxAbsMs < targets.maxBeatErrorMs,
+    phase: phase && Number.isFinite(phase.offsetMs) ? Math.abs(phase.offsetMs) < targets.maxBeatErrorMs : null,
     lowBand: unexpectedCollisionBeats.length === 0,
-    loudness: loudnessDeviationLu <= targets.maxLoudnessDeviationLu,
+    // A planned blend walks from one track's level to the other's; with a forecast to judge
+    // the walk by (stacking, hole), the deviation from the median is information, not a verdict.
+    loudness: forecast ? null : loudnessDeviationLu <= targets.maxLoudnessDeviationLu,
     peak: peakDb <= targets.maxPeakDb,
+    stacking: forecast && Number.isFinite(forecast.measuredExcessDb) ? forecast.measuredExcessDb <= targets.maxStackingDb : null,
+    hole: forecast && Number.isFinite(forecast.measuredHoleDb) ? forecast.measuredHoleDb <= targets.maxHoleDb : null,
   };
   return {
     alignment,
+    ...(phase ? { phase } : {}),
     collisions,
     unexpectedCollisionBeats,
     loudness,
     loudnessDeviationLu,
     samplePeakDb: peakDb,
     truePeakDb: measureLoudness(master, sampleRate).truePeakDb,
+    ...(bands ? { bands } : {}),
+    ...(forecast ? { forecast } : {}),
     checks,
     pass: Object.values(checks).every((check) => check !== false),
   };

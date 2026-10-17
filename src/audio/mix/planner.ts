@@ -1,5 +1,6 @@
 import { toCamelot, type MusicalKey } from '../analysis/key';
 import type { AudioAnalysis, TrackKey } from '../analysis/types';
+import { loudnessTrimDb } from '../engine/curves';
 import { balancePlan, type BalanceReport } from './balance';
 import { bestKeyShift, harmonicScore, MIN_KEY_SHIFT_CONFIDENCE, transpose } from './harmonic';
 import { chooseMixPoints, type MixTiming, type OutgoingLoop } from './mixPoints';
@@ -93,9 +94,14 @@ export function planTransition(input: PlanInput): TransitionPlan {
   const keyClash = score < KEY_CLASH_SCORE;
 
   const currentBar = trackClock(out, outgoingBpm).beatAt(input.outgoing.trackTime) / 4;
+  // Low-band levels as the decks will play them, so the swap can avoid a bass hole.
+  const trimmedLow = (analysis: AudioAnalysis) => {
+    const trim = loudnessTrimDb(analysis.loudness.integratedLufs);
+    return analysis.bars.lowDb.map((db) => db + trim);
+  };
   const points = chooseMixPoints({
-    outgoing: { phrases: out.phrases, barCount: out.bars.lowDb.length, currentBar },
-    incoming: { phrases: inc.phrases, barCount: inc.bars.lowDb.length },
+    outgoing: { phrases: out.phrases, barCount: out.bars.lowDb.length, lowDb: trimmedLow(out), currentBar },
+    incoming: { phrases: inc.phrases, barCount: inc.bars.lowDb.length, lowDb: trimmedLow(inc) },
     leadBars: tempo.outgoingRampBars + SCHEDULING_LEAD_BARS,
     maxOverlapBars: tempo.canBlend ? policy.maxOverlapBars : 0,
     timing: input.timing,

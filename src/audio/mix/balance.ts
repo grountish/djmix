@@ -58,6 +58,15 @@ const REFERENCE_BARS = 8;
 const TOLERANCE_DB = 1;
 /** A band is lifted at most this far above the template (and never above unity)… */
 const MAX_BOOST_DB = 3;
+/**
+ * …except the incoming low band from the swap on, which may be lifted this far above its
+ * template, unity or not: a bass that arrives quieter than the one it replaces is pushed to
+ * meet it, then released to its own level by the end of the blend (what a DJ does with the
+ * low knob on a weaker bass).
+ */
+const MAX_LOW_LIFT_DB = 4;
+/** Bars before the swap whose outgoing level the low band's handover walk starts from. */
+const SWAP_LEVEL_BARS = 2;
 /** …and cut to no lower than this (kills stay kills). */
 const FLOOR_DB = -24;
 /** The incoming deck's corrections fade out over its last bars, so it leaves the blend at unity. */
@@ -120,21 +129,20 @@ export function balanceLanes(lanes: Lane[], input: BalanceInput): { lanes: Lane[
     const bars: { pOut: number; pIn: number; target: number; eqOut: number; eqIn: number }[] = [];
     const cOut: number[] = [];
     const cIn: number[] = [];
+    // The level the ear has just heard when the bass swaps: the outgoing's, right before it.
+    const swapLevel = recentLevel(out.level[band], swap, out.reference[band]);
     for (let b = 0; b <= n; b++) {
       const tOut = gainsAt(lanes, 'outgoing', band, b);
       const tIn = gainsAt(lanes, 'incoming', band, b);
       const pOut = toPower(out.level[band][b] + tOut.total);
       const pIn = toPower(inc.level[band][b] + tIn.total);
-      // The blend holds the outgoing track's level until the bass swap, then walks to the
-      // incoming track's level.
-      const walk =
-        b <= swap
-          ? out.reference[band]
-          : mixDb(out.reference[band], inc.reference[band], (b - swap) / Math.max(1, n - swap));
-      // The sum may be as loud as the lead deck plays on its own (the outgoing until the swap,
-      // the incoming after), so a track is never cut for the other one being quiet, and the
-      // other deck fits under the walk. The low band follows the walk from the swap on, so
-      // the bass hands over at one level.
+      // Until the bass swap the blend is the outgoing track as it plays: the sum may be as
+      // loud as it alone, so it is never cut for the other deck being quiet and the incoming
+      // fits under it. From the swap on the blend walks from the outgoing's level there to
+      // the incoming track's own level; the incoming (now the lead) keeps its own dynamics
+      // above the walk, except in the low band, which follows the walk so the bass hands
+      // over at one level and eases to its own.
+      const walk = b < swap ? out.level[band][b] : mixDb(swapLevel, inc.reference[band], (b - swap) / Math.max(1, n - swap));
       const lead = b < swap ? pOut : pIn;
       const target = band === 'low' && b >= swap ? toPower(walk) : Math.max(toPower(walk), lead);
       bars.push({ pOut, pIn, target, eqOut: tOut.eq, eqIn: tIn.eq });
@@ -146,7 +154,7 @@ export function balanceLanes(lanes: Lane[], input: BalanceInput): { lanes: Lane[
         if (excess > TOLERANCE_DB) common = -(excess - TOLERANCE_DB);
         else if (excess < -TOLERANCE_DB) common = Math.min(MAX_BOOST_DB, -excess - TOLERANCE_DB);
       }
-      cIn.push(clampCorrection(common, tIn.eq));
+      cIn.push(clampCorrection(common, tIn.eq, band === 'low' && b >= swap ? MAX_LOW_LIFT_DB : undefined));
       cOut.push(b === 0 ? 0 : clampCorrection(common, tOut.eq));
     }
 
@@ -298,14 +306,22 @@ function slewRelease(series: number[]): void {
 }
 
 /**
- * A correction on a template value: never above unity or +MAX_BOOST, never below the floor.
- * Kills, and bands the template already has below the floor, are left as they are.
+ * A correction on a template value: never above unity or +MAX_BOOST (or, with `lift`, no
+ * higher than that above the template), never below the floor. Kills, and bands the template
+ * already has below the floor, are left as they are.
  */
-function clampCorrection(correction: number, templateDb: number): number {
+function clampCorrection(correction: number, templateDb: number, lift?: number): number {
   if (!Number.isFinite(templateDb) || templateDb <= FLOOR_DB) return 0;
-  const high = Math.max(0, Math.min(MAX_BOOST_DB, -templateDb));
+  const high = lift !== undefined ? lift : Math.max(0, Math.min(MAX_BOOST_DB, -templateDb));
   const low = Math.min(0, FLOOR_DB - templateDb);
   return Math.max(low, Math.min(high, correction));
+}
+
+/** Power mean of the bars just before `bar` that have sound; `fallback` when none have. */
+function recentLevel(series: number[], bar: number, fallback: number): number {
+  const values = series.slice(Math.max(0, bar - SWAP_LEVEL_BARS), Math.max(0, bar)).filter((db) => db > SILENCE_DB);
+  if (values.length === 0) return fallback;
+  return toDb(values.reduce((sum, db) => sum + toPower(db), 0) / values.length);
 }
 
 /**

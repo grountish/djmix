@@ -1,5 +1,5 @@
 import type { BeatClock } from '../analysis/beatClock';
-import { filterKnobToCutoffs } from '../engine/curves';
+import { FILTER_HIGHPASS_MIN_HZ, filterKnobToCutoffs, settleHighpass } from '../engine/curves';
 import type { DeckPlayer } from '../engine/deckPlayer';
 import { type DeckId, type MixGraph, setCrossfaderPosition, setParamSmooth } from '../engine/mixGraph';
 import { STRETCH_LEAD } from '../engine/stretch';
@@ -31,6 +31,8 @@ export type LaneValues = Record<LaneTarget, Partial<Record<LaneControl, number>>
 const SEND_AHEAD = STRETCH_LEAD + 0.15;
 const CURVE_POINTS = 48;
 const RATE_EPSILON = 1e-7;
+/** Time constant for putting a stopped deck's controls back to neutral. */
+const PARAM_RESET_SMOOTHING = 0.01;
 /**
  * Beat-lock rates further than this from the planned incoming rate mean a beat clock is wrong
  * (beats miscounted); the incoming deck then holds the planned rate instead of chasing them.
@@ -260,7 +262,7 @@ export class TransitionRunner {
       setParamSmooth(param, 1, this.ctx);
     }
     setParamSmooth(deck.filter.lowpass.frequency, this.ctx.sampleRate / 2, this.ctx);
-    setParamSmooth(deck.filter.highpass.frequency, 0, this.ctx);
+    settleHighpass(deck.filter.highpass.frequency, 0, this.ctx, PARAM_RESET_SMOOTHING);
     this.events.onOutgoingStopped?.();
   }
 
@@ -301,7 +303,14 @@ export class TransitionRunner {
         ? [{ param: deck.fader.gain, value: (v) => v }]
         : lane.control === 'filter'
           ? [
-              { param: deck.filter.highpass.frequency, value: (v) => filterKnobToCutoffs(v, this.ctx.sampleRate / 2).highpassHz },
+              {
+                param: deck.filter.highpass.frequency,
+                // A high-pass sweep starts by jumping from 0 to the lowest cutoff, never by
+                // ramping up through the sub-hertz region (see FILTER_HIGHPASS_MIN_HZ).
+                value: lane.points.some((point) => point.value > 0)
+                  ? (v) => Math.max(FILTER_HIGHPASS_MIN_HZ, filterKnobToCutoffs(v, this.ctx.sampleRate / 2).highpassHz)
+                  : (v) => filterKnobToCutoffs(v, this.ctx.sampleRate / 2).highpassHz,
+              },
               { param: deck.filter.lowpass.frequency, value: (v) => filterKnobToCutoffs(v, this.ctx.sampleRate / 2).lowpassHz },
             ]
           : [{ param: deck.eq[lane.control].gain, value: eqDbToGain }];

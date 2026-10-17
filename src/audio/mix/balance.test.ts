@@ -111,13 +111,16 @@ describe('balanceLanes', () => {
     expect(laneValueAt(outLow, swap + 1)).toBe(KILL);
   });
 
-  it('never boosts a band above unity, even when both tracks are quiet', () => {
+  it('never lifts a band above unity (or above the template, where that is higher), even when both tracks are quiet', () => {
     const outgoing = deck(energies(128, STEADY, [{ from: 80, to: 128, levels: { mid: -30, high: -36 } }]), 80);
     const incoming = deck(energies(128, STEADY, [{ from: 0, to: 48, levels: { mid: -30, high: -36 } }]), 16);
     const { lanes } = balanceLanes(template, { overlapBars: overlap, bassSwapBar: swap, outgoing, incoming });
     for (const l of lanes) {
       if (l.control === 'fader' || l.control === 'filter') continue;
-      for (const point of l.points) expect(point.value).toBeLessThanOrEqual(0);
+      const original = lane(template, l.target, l.control);
+      for (const point of l.points) {
+        expect(point.value).toBeLessThanOrEqual(Math.max(0, laneValueAt(original, point.bar)) + 1e-9);
+      }
     }
   });
 

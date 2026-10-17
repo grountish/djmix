@@ -1,5 +1,5 @@
 import { crossfaderGainsFor, type CrossfaderSettings, DEFAULT_CROSSFADER } from './crossfaderCurve';
-import { eqKnobToGain, filterKnobToCutoffs } from './curves';
+import { eqKnobToGain, filterKnobToCutoffs, settleHighpass } from './curves';
 import { type ChannelFx, createChannelFx } from './fx';
 
 export type DeckId = 'A' | 'B';
@@ -194,7 +194,8 @@ export function setFilter(graph: MixGraph, deck: DeckId, position: number): void
   const { lowpassHz, highpassHz } = filterKnobToCutoffs(position, graph.ctx.sampleRate / 2);
   const { lowpass, highpass } = graph.decks[deck].filter;
   setParamSmooth(lowpass.frequency, lowpassHz, graph.ctx);
-  setParamSmooth(highpass.frequency, highpassHz, graph.ctx);
+  // Never glides through the sub-hertz region (see settleHighpass).
+  settleHighpass(highpass.frequency, highpassHz, graph.ctx, PARAM_SMOOTHING);
 }
 
 /** Loudness trim in dB, applied before the EQ. */

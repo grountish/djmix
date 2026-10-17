@@ -7,6 +7,11 @@ export interface MixPointTrack {
   phrases: Phrase[];
   /** Full bars from the first downbeat. */
   barCount: number;
+  /**
+   * Low-band level per bar (dB) as the deck will play it (its loudness trim included), so the
+   * bass swap avoids a hole: the incoming bass arriving far below the outgoing one.
+   */
+  lowDb?: number[];
 }
 
 export interface MixPointInput {
@@ -124,6 +129,15 @@ const LOOP_WRAP_WEIGHT = 1.5;
 const MAX_LOOP_WRAPS = 2;
 /** A loop whose bars all carry the bassline sounds like the track, not a stutter. */
 const LOOP_BASS_BONUS = 1;
+/**
+ * Per dB² the incoming low end arrives below the outgoing one at the swap, past a tolerance:
+ * a hole in the bass. 10 dB costs more than a drop landing on the swap earns.
+ */
+const BASS_HOLE_WEIGHT = 0.25;
+const BASS_HOLE_TOLERANCE_DB = 3;
+const MAX_BASS_HOLE_DB = 30;
+/** Bars averaged on each side of the swap for the hole. */
+const BASS_HOLE_BARS = 2;
 
 /**
  * Where to mix. Both tracks change on their phrase grids at the same moment. Every
@@ -205,6 +219,7 @@ export function chooseMixPoints(input: MixPointInput): MixPoints {
             }
             // The outgoing low end leaves by itself only where the track still runs its course.
             if (loopWrapsBy(loop, start + swap) === 0 && exits.includes(start + swap)) score += NATURAL_SWAP;
+            score -= BASS_HOLE_WEIGHT * bassHole(outgoing.lowDb, incoming.lowDb, trackBar, start, cue, swap) ** 2;
             if (loop) {
               score -= LOOP_WRAP_WEIGHT * wraps;
               if (bassOut && countTrue(bassOut, loop.startBar, loop.bars) === loop.bars) score += LOOP_BASS_BONUS;
@@ -271,6 +286,34 @@ function loopCandidates(barCount: number, origin: number, earliest: number, kick
     if (countTrue(kick, start, PHRASE_BARS) === PHRASE_BARS) loops.push({ startBar: start, bars: PHRASE_BARS });
   }
   return loops;
+}
+
+/**
+ * How far (dB, 0 … MAX_BASS_HOLE_DB) the incoming low end at the swap falls below the
+ * outgoing one just before it, past the tolerance: the bass hole a listener would hear.
+ * Bars past the end of the incoming track are silence; 0 without level information.
+ */
+function bassHole(
+  outLow: number[] | undefined,
+  inLow: number[] | undefined,
+  trackBar: (bar: number) => number,
+  start: number,
+  cue: number,
+  swap: number,
+): number {
+  if (!outLow || !inLow || outLow.length === 0) return 0;
+  const powerMean = (levels: (number | undefined)[]) => {
+    const known = levels.filter((db): db is number => db !== undefined);
+    if (known.length === 0) return undefined;
+    return 10 * Math.log10(known.reduce((sum, db) => sum + Math.pow(10, db / 10), 0) / known.length);
+  };
+  const before: (number | undefined)[] = [];
+  for (let bar = start + swap - BASS_HOLE_BARS; bar < start + swap; bar++) before.push(outLow[trackBar(bar)]);
+  const after: number[] = [];
+  for (let bar = cue + swap; bar < cue + swap + BASS_HOLE_BARS; bar++) after.push(inLow[bar] ?? -120);
+  const outgoingDb = powerMean(before);
+  if (outgoingDb === undefined) return 0;
+  return Math.min(MAX_BASS_HOLE_DB, Math.max(0, outgoingDb - powerMean(after)! - BASS_HOLE_TOLERANCE_DB));
 }
 
 /**

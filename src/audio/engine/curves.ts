@@ -47,8 +47,15 @@ export function eqGainToKnob(gain: number): number {
 /** Lowest low-pass and highest high-pass cutoff of the filter knob's sweep. */
 const FILTER_LOWPASS_MIN_HZ = 150;
 const FILTER_HIGHPASS_MAX_HZ = 8000;
-const FILTER_HIGHPASS_MIN_HZ = 20;
 const FILTER_LOWPASS_MAX_HZ = 20000;
+/**
+ * Lowest high-pass cutoff of a sweep. The high-pass rests at exactly 0 Hz (a pass-through
+ * special case in every implementation) and must only ever JUMP between 0 and this: a biquad
+ * at a fraction of a hertz is numerically ill-conditioned — ramping 0 → 20 Hz bursts the low
+ * band by 45 dB, gliding towards 0 with setTargetAtTime runs away by 150 dB (both measured
+ * offline). The jump itself costs under 2 dB for a moment. See `settleHighpass`.
+ */
+export const FILTER_HIGHPASS_MIN_HZ = 20;
 
 /**
  * Filter knob: 0 = off, -1 = low-pass swept down to 150 Hz, +1 = high-pass swept up to
@@ -72,4 +79,22 @@ export function filterKnobToCutoffs(
     };
   }
   return { lowpassHz: nyquist, highpassHz: 0 };
+}
+
+/**
+ * Moves a high-pass cutoff to `hz` without ever sitting between 0 and the lowest sweep
+ * cutoff (see FILTER_HIGHPASS_MIN_HZ): towards 0 it glides down to that cutoff and then
+ * snaps to 0; from 0 it snaps to the cutoff and glides on; between cutoffs it glides.
+ */
+export function settleHighpass(param: AudioParam, hz: number, ctx: BaseAudioContext, timeConstant: number): void {
+  const now = ctx.currentTime;
+  param.cancelAndHoldAtTime(now);
+  if (hz <= 0) {
+    if (param.value <= 0) return;
+    param.setTargetAtTime(FILTER_HIGHPASS_MIN_HZ, now, timeConstant);
+    param.setValueAtTime(0, now + 5 * timeConstant);
+    return;
+  }
+  if (param.value <= 0) param.setValueAtTime(FILTER_HIGHPASS_MIN_HZ, now);
+  param.setTargetAtTime(Math.max(FILTER_HIGHPASS_MIN_HZ, hz), now, timeConstant);
 }

@@ -24,6 +24,11 @@ const OUTRO_HIGHPASS = 0.55;
 const MAX_FADE_IN_BARS = 24;
 /** …and is at full level this many bars before the blend ends. */
 const FADE_IN_SETTLE_BARS = 4;
+/**
+ * From the swap on, the incoming low band makes up for what its fader still lacks, so the
+ * bass hands over at full level while the fader goes on easing the rest of the track in.
+ */
+const MAX_LOW_COMPENSATION_DB = 6;
 
 /**
  * EQ blend around the bass swap. The incoming track fades in slowly over most of the blend
@@ -42,22 +47,24 @@ export function blendTemplate(overlapBars: number, bassSwapBar: number): Lane[] 
     { bar: swap, value: -4 },
     { bar: swap + after / 4, value: 0 },
   ];
+  // The fader's own law (a 'rise' from 0 to 1 over fadeIn bars), inverted for the low band.
+  const faderGain = (bar: number) => (bar >= fadeIn ? 1 : Math.sin((Math.PI / 2) * (bar / fadeIn)));
+  const lowCompensation = (bar: number) =>
+    Math.min(MAX_LOW_COMPENSATION_DB, -20 * Math.log10(Math.max(1e-6, faderGain(bar))));
+  const incomingLow = [
+    { bar: 0, value: KILL },
+    { bar: swap - BASS_SWAP_BARS, value: KILL },
+  ];
+  for (let bar = swap; bar < fadeIn; bar++) incomingLow.push({ bar, value: lowCompensation(bar) });
+  incomingLow.push({ bar: Math.max(swap, fadeIn), value: 0 });
 
   return [
     { target: 'incoming', control: 'fader', shape: 'rise', points: [{ bar: 0, value: 0 }, { bar: fadeIn, value: 1 }] },
     { target: 'incoming', control: 'high', shape: 'linear', points: [{ bar: 0, value: -6 }, { bar: length / 4, value: 0 }] },
     { target: 'incoming', control: 'mid', shape: 'linear', points: incomingMid },
-    // The low bands cross equal-power, so the bass neither dips nor doubles during the swap.
-    {
-      target: 'incoming',
-      control: 'low',
-      shape: 'rise',
-      points: [
-        { bar: 0, value: KILL },
-        { bar: swap - BASS_SWAP_BARS, value: KILL },
-        { bar: swap, value: 0 },
-      ],
-    },
+    // The low bands cross equal-power, so the bass neither dips nor doubles during the swap;
+    // the incoming one then holds full level under its still-rising fader.
+    { target: 'incoming', control: 'low', shape: 'rise', points: incomingLow },
     {
       target: 'outgoing',
       control: 'low',

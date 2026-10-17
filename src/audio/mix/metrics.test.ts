@@ -1,11 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import { analyzeAudio } from '../analysis/analyzeAudio';
 import { synthesizeTrack, type SyntheticSection } from '../analysis/syntheticTrack';
+import type { BalanceReport } from './balance';
 import {
+  bandLevels,
   beatAlignment,
+  checkForecast,
   kickOnsets,
+  kickPhaseOffset,
   loudnessDeviation,
   lowBandCollisions,
+  lowOnsets,
   samplePeakDb,
   shortTermLoudness,
   summarizeTransition,
@@ -252,7 +257,15 @@ describe('summarizeTransition', () => {
     expect(metrics.loudnessDeviationLu).toBeLessThan(1);
     expect(metrics.samplePeakDb).toBeLessThan(-1);
     expect(metrics.truePeakDb).toBeLessThan(-1);
-    expect(metrics.checks).toEqual({ beatAlignment: true, lowBand: true, loudness: true, peak: true });
+    expect(metrics.checks).toEqual({
+      beatAlignment: true,
+      phase: null,
+      lowBand: true,
+      loudness: true,
+      peak: true,
+      stacking: null,
+      hole: null,
+    });
     expect(metrics.pass).toBe(true);
   });
 
@@ -262,7 +275,153 @@ describe('summarizeTransition', () => {
     expect(metrics.unexpectedCollisionBeats).toEqual([8, 9, 10, 11, 12, 13, 14, 15]);
     expect(metrics.loudnessDeviationLu).toBeGreaterThan(2.5);
     expect(metrics.samplePeakDb).toBeGreaterThan(0);
-    expect(metrics.checks).toEqual({ beatAlignment: false, lowBand: false, loudness: false, peak: false });
+    expect(metrics.checks).toEqual({
+      beatAlignment: false,
+      phase: null,
+      lowBand: false,
+      loudness: false,
+      peak: false,
+      stacking: null,
+      hole: null,
+    });
     expect(metrics.pass).toBe(false);
+  });
+
+  it('reads the grid-free phase offset when given the beat period', () => {
+    const metrics = summarizeTransition({ ...render(0.008, 10, 1), periodSeconds: 0.5 });
+    expect(metrics.phase).toBeDefined();
+    expect(Math.abs(metrics.phase!.offsetMs - 8)).toBeLessThan(0.5);
+    expect(metrics.checks.phase).toBe(false);
+  });
+});
+
+describe('lowOnsets', () => {
+  const beats = synthesizeTrack({ bpm: 124, firstDownbeat: 0.5, sections: [{ bars: 8 }] }).beatTimes.slice(0, 32);
+
+  it('finds every kick of a groove without a grid, at the analyzer\'s 50% rise point', () => {
+    const track = kickTrack(0.5, [{ bars: 8, kick: true, hats: true, clap: true, chords: true }]);
+    const onsets = lowOnsets(track, SAMPLE_RATE);
+    expect(onsets).toHaveLength(32);
+    // The same beat definition as kickOnsets, which also averages neighbouring kicks; a clap or
+    // chord under a single kick moves its 50% point by a couple of milliseconds.
+    const expected = kickOnsets(track, SAMPLE_RATE, beats);
+    onsets.forEach((onset, k) => expect(Math.abs(onset - expected[k]!)).toBeLessThan(0.003));
+  });
+
+  it('keeps the kicks when a bass line plays between them (its notes may be counted too)', () => {
+    const track = kickTrack(0.5, [{ bars: 8, kick: true, hats: true, bass: true, chords: true }]);
+    const onsets = lowOnsets(track, SAMPLE_RATE);
+    const onBeat = onsets.filter((onset) => beats.some((beat) => Math.abs(onset - beat) < 0.005));
+    expect(onBeat.length).toBeGreaterThanOrEqual(24);
+    expect(onsets.length).toBeLessThan(48);
+  });
+
+  it('ignores a sustained sub and a beatless section', () => {
+    const groove = kickTrack(0.5, [{ bars: 4, kick: true }, { bars: 4, hats: true, chords: true }]);
+    const withSub = groove.map((v, i) => v + 0.3 * Math.sin((2 * Math.PI * 45 * i) / SAMPLE_RATE));
+    const onsets = lowOnsets(withSub, SAMPLE_RATE);
+    expect(onsets).toHaveLength(16);
+    expect(onsets[onsets.length - 1]).toBeLessThan(beats[16]);
+  });
+
+  it('respects the window', () => {
+    const track = kickTrack(0.5, [{ bars: 8, kick: true }]);
+    const onsets = lowOnsets(track, SAMPLE_RATE, beats[8] - 0.05, beats[16] - 0.05);
+    expect(onsets).toHaveLength(8);
+  });
+});
+
+describe('kickPhaseOffset', () => {
+  const period = 60 / 124;
+
+  it('reads a 3 ms lag from the period alone, bass line or not', () => {
+    const a = kickTrack(0.5, [{ bars: 8, kick: true, hats: true, bass: true, chords: true }]);
+    const b = kickTrack(0.503, [{ bars: 8, kick: true, clap: true }]);
+    const phase = kickPhaseOffset(a, b, SAMPLE_RATE, period);
+    expect(Math.abs(phase.offsetMs - 3)).toBeLessThan(0.5);
+    expect(phase.correlation).toBeGreaterThan(0.5);
+    expect(phase.coherence.b).toBeGreaterThan(0.99);
+    expect(phase.onsets.b).toBe(32);
+  });
+
+  it('sees a deck whose kicks sit half a beat off as ±half a period', () => {
+    const a = kickTrack(0.5, [{ bars: 8, kick: true }]);
+    const b = kickTrack(0.5 + period / 2, [{ bars: 8, kick: true }]);
+    const phase = kickPhaseOffset(a, b, SAMPLE_RATE, period);
+    expect(Math.abs(Math.abs(phase.offsetMs) - (period / 2) * 1000)).toBeLessThan(1);
+  });
+
+  it('reads aligned decks as 0 and gives no offset without kicks', () => {
+    const a = kickTrack(0.5, [{ bars: 8, kick: true, bass: true }]);
+    expect(Math.abs(kickPhaseOffset(a, a.slice(), SAMPLE_RATE, period).offsetMs)).toBeLessThan(0.01);
+    const silence = new Float32Array(a.length);
+    const none = kickPhaseOffset(a, silence, SAMPLE_RATE, period);
+    expect(none.offsetMs).toBeNaN();
+    expect(none.correlation).toBe(0);
+    expect(none.onsets.b).toBe(0);
+  });
+});
+
+describe('bandLevels and checkForecast', () => {
+  // Four 2-second bars; the outgoing deck plays a tone in every band, the incoming a mid tone
+  // throughout and a high tone over the last two bars.
+  const barTimes = [0, 2, 4, 6, 8];
+  const outgoing = mix(tone(8, 60, 0.3), tone(8, 1000, 0.05), tone(8, 6000, 0.02));
+  const incoming = mix(tone(8, 1000, 0.1), tone(8, 6000, 0.03, 4, 8));
+  const sineDb = (amplitude: number) => 10 * Math.log10((amplitude * amplitude) / 2);
+
+  it('puts each tone in its band, per bar', () => {
+    const levels = bandLevels({ outgoing, incoming }, SAMPLE_RATE, barTimes);
+    expect(levels.outgoing.low).toHaveLength(4);
+    for (const db of levels.outgoing.low) expect(db).toBeCloseTo(sineDb(0.3), 0);
+    for (const db of levels.outgoing.mid) expect(db).toBeCloseTo(sineDb(0.05), 0);
+    for (const db of levels.outgoing.high) expect(db).toBeCloseTo(sineDb(0.02), 0);
+    for (const db of levels.incoming.low) expect(db).toBeLessThan(-60);
+    for (const db of levels.incoming.mid) expect(db).toBeCloseTo(sineDb(0.1), 0);
+    expect(levels.incoming.high[0]).toBeLessThan(-60);
+    expect(levels.incoming.high[3]).toBeCloseTo(sineDb(0.03), 0);
+    // The sum is the power sum: equal mids add 3 dB over the louder... 0.05² + 0.1² vs 0.1².
+    expect(levels.sum.low[0]).toBeCloseTo(levels.outgoing.low[0], 1);
+    expect(levels.sum.mid[0]).toBeCloseTo(10 * Math.log10((0.05 * 0.05 + 0.1 * 0.1) / 2), 0);
+  });
+
+  it('calibrates the forecast on the first bars and reports excess and holes against it', () => {
+    const levels = bandLevels({ outgoing, incoming }, SAMPLE_RATE, barTimes);
+    // A forecast on a scale 10 dB above the render's, built from the measured bars: the low
+    // band predicted 6 dB louder than measured from bar 1 on (a hole), the high band 4 dB
+    // quieter than measured from bar 2 on (stacking), the mids exact.
+    const scale = 10;
+    const flat = (value: number) => [value, value, value, value, value];
+    const instants = (perBar: number[]) => [...perBar, perBar[perBar.length - 1]].map((v) => v + scale);
+    const low = instants(levels.sum.low).map((v, b) => (b >= 1 ? v + 6 : v));
+    const mid = instants(levels.sum.mid);
+    const high = instants(levels.sum.high).map((v, b) => (b >= 2 ? v - 4 : v));
+    const forecast: BalanceReport = {
+      levels: {
+        outgoing: {
+          low: instants(levels.outgoing.low),
+          mid: instants(levels.outgoing.mid),
+          high: instants(levels.outgoing.high),
+        },
+        incoming: { low: flat(-120), mid: flat(-120), high: flat(-120) },
+      },
+      bands: {
+        low: { reference: low, template: low, balanced: low },
+        mid: { reference: mid, template: mid, balanced: mid },
+        high: { reference: high, template: high, balanced: high },
+      },
+      templateExcessDb: 0,
+      balancedExcessDb: 0,
+    };
+    const check = checkForecast(levels, forecast);
+    for (const band of ['low', 'mid', 'high'] as const) expect(check.calibrationDb[band]).toBeCloseTo(-scale, 0);
+    // Inner bars 1 and 2 (bar 0 calibrates, the last bar is left out).
+    expect(check.errorDb.low[1]).toBeCloseTo(-6, 0);
+    expect(Math.abs(check.errorDb.mid[1])).toBeLessThan(0.2);
+    expect(check.measuredHoleDb).toBeCloseTo(6, 0);
+    // Bar 2's high reference is the mid-bar mean of instants 2 and 3, both 4 dB under.
+    expect(check.measuredExcessDb).toBeCloseTo(4, 0);
+    expect(check.rmsErrorDb).toBeGreaterThan(3);
+    expect(check.maxAbsErrorDb).toBeCloseTo(6, 0);
   });
 });

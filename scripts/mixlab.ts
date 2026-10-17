@@ -160,6 +160,9 @@ async function main(): Promise<void> {
       overlapStart: runner.incomingStart,
       overlapEnd: runner.overlapEnd,
       allowedCollisionBeats: [swapBeat - 1, swapBeat],
+      periodSeconds: 60 / plan.tempo.meetBpm,
+      barTimes: Array.from({ length: plan.overlapBars + 1 }, (_, b) => runner.outgoingBeatTime(startBeat + 4 * b)!),
+      forecast: plan.balance,
     });
     report.beatAlignmentMs = {
       beats: metrics.alignment.summary.count,
@@ -168,7 +171,37 @@ async function main(): Promise<void> {
       p95: +metrics.alignment.summary.p95AbsMs.toFixed(2),
       max: +metrics.alignment.summary.maxAbsMs.toFixed(2),
     };
+    if (metrics.phase) {
+      report.kickPhase = {
+        offsetMs: +metrics.phase.offsetMs.toFixed(2),
+        correlation: +metrics.phase.correlation.toFixed(2),
+        coherence: { a: +metrics.phase.coherence.a.toFixed(2), b: +metrics.phase.coherence.b.toFixed(2) },
+        onsets: metrics.phase.onsets,
+      };
+    }
     report.lowBandCollisions = metrics.unexpectedCollisionBeats;
+    if (process.env.MIXLAB_DEBUG && metrics.unexpectedCollisionBeats.length > 0) {
+      for (const beat of metrics.unexpectedCollisionBeats) {
+        const around = (values: number[]) =>
+          values.slice(Math.max(0, beat - 2), beat + 3).map((v) => v.toFixed(1).padStart(6)).join('');
+        console.log(`collision at beat ${beat} (bar ${(beat / 4).toFixed(2)}): out ${around(metrics.collisions.aDb)} | in ${around(metrics.collisions.bDb)} (dB rel. own loudest, beats ${beat - 2}…${beat + 2})`);
+      }
+    }
+    if (metrics.forecast) {
+      report.forecast = {
+        rmsErrorDb: +metrics.forecast.rmsErrorDb.toFixed(2),
+        maxAbsErrorDb: +metrics.forecast.maxAbsErrorDb.toFixed(2),
+        measuredExcessDb: +metrics.forecast.measuredExcessDb.toFixed(2),
+        measuredHoleDb: +metrics.forecast.measuredHoleDb.toFixed(2),
+      };
+      if (process.env.MIXLAB_DEBUG && metrics.bands) {
+        const row = (values: number[]) => values.map((v) => (Number.isFinite(v) ? v.toFixed(0).padStart(4) : '   -')).join('');
+        for (const band of ['low', 'mid', 'high'] as const) {
+          const calibrated = metrics.bands.sum[band].map((v) => v - metrics.forecast!.calibrationDb[band]);
+          console.log(`${band.padEnd(5)} msr ${row(calibrated)}  (render, on the forecast's scale)`);
+        }
+      }
+    }
     if (process.env.MIXLAB_DEBUG) {
       console.log('aligned beats', JSON.stringify(metrics.alignment.beats.map((b) => [b.beat, +b.diffMs.toFixed(1)])));
       const { times, lufs } = metrics.loudness;
