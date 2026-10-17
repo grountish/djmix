@@ -43,10 +43,11 @@ export function blendTemplate(overlapBars: number, bassSwapBar: number): Lane[] 
     { target: 'incoming', control: 'fader', shape: 'rise', points: [{ bar: 0, value: 0 }, { bar: fadeIn, value: 1 }] },
     { target: 'incoming', control: 'high', shape: 'linear', points: [{ bar: 0, value: -6 }, { bar: length / 4, value: 0 }] },
     { target: 'incoming', control: 'mid', shape: 'linear', points: incomingMid },
+    // The low bands cross equal-power, so the bass neither dips nor doubles during the swap.
     {
       target: 'incoming',
       control: 'low',
-      shape: 'linear',
+      shape: 'rise',
       points: [
         { bar: 0, value: KILL },
         { bar: swap - BASS_SWAP_BARS, value: KILL },
@@ -56,7 +57,7 @@ export function blendTemplate(overlapBars: number, bassSwapBar: number): Lane[] 
     {
       target: 'outgoing',
       control: 'low',
-      shape: 'linear',
+      shape: 'fall',
       points: [
         { bar: swap - BASS_SWAP_BARS, value: 0 },
         { bar: swap, value: KILL },
@@ -117,9 +118,14 @@ export function laneValueAt(lane: Lane, bar: number): number {
 const KILL_FLOOR_DB = -60;
 
 export function interpolate(lane: Pick<Lane, 'control' | 'shape'>, from: number, to: number, t: number): number {
-  if (lane.shape === 'rise') return from + (to - from) * Math.sin((t * Math.PI) / 2);
-  if (lane.shape === 'fall') return to + (from - to) * Math.cos((t * Math.PI) / 2);
   const isEq = lane.control === 'low' || lane.control === 'mid' || lane.control === 'high';
+  if (lane.shape === 'rise' || lane.shape === 'fall') {
+    // Quarter-sine in gain: a rise and a fall over the same span sum to constant power.
+    const [a, b] = isEq ? [eqDbToGain(from), eqDbToGain(to)] : [from, to];
+    const value = lane.shape === 'rise' ? a + (b - a) * Math.sin((t * Math.PI) / 2) : b + (a - b) * Math.cos((t * Math.PI) / 2);
+    if (!isEq) return value;
+    return value > 0 ? 20 * Math.log10(value) : KILL;
+  }
   if (!isEq) return from + (to - from) * t;
   if (t <= 0) return from;
   if (t >= 1) return to;
