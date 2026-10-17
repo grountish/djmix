@@ -1,5 +1,5 @@
 /** Bumped whenever analysis output changes, so cached results are recomputed. */
-export const ANALYZER_VERSION = 5;
+export const ANALYZER_VERSION = 6;
 
 export type PhraseLabel = 'intro' | 'build' | 'drop' | 'breakdown' | 'outro';
 
@@ -82,6 +82,11 @@ export interface AnalysisOverrides {
   downbeatShift?: number;
   /** Camelot code replacing the tagged or detected key. */
   key?: string;
+  /**
+   * Moves every phrase boundary (and so the 8-bar phrase grid that cues and entries sit on)
+   * this many bars later (negative: earlier). Relative to the analysed phrases.
+   */
+  phraseShift?: number;
   /**
    * The analysed grid the grid corrections were made on, and the bar line they produced (s).
    * When a re-analysis moves the grid, the corrections are re-expressed against the new one.

@@ -51,7 +51,7 @@ export function analyzeStructure(
   const features = measureBars(spectral, clock, downbeat, barCount);
   if (barCount < 2) return { bars: features.energies, phrases: [] };
 
-  const origin = choosePhraseOrigin(computeNovelty(features, barCount));
+  const origin = choosePhraseOrigin(computeNovelty(features, barCount), barCount);
   const starts = [0];
   for (let bar = origin; bar < barCount; bar += PHRASE_BARS) if (bar > 0) starts.push(bar);
 
@@ -69,7 +69,7 @@ export function analyzeStructure(
   return { bars: features.energies, phrases: labelBlocks(features, blocks) };
 }
 
-function measureBars(
+export function measureBars(
   spectral: SpectralFeatures,
   clock: BeatClock,
   downbeat: number,
@@ -130,7 +130,7 @@ function measureBars(
   return features;
 }
 
-function classifyBars(features: BarFeatures): BlockState[] {
+export function classifyBars(features: BarFeatures): BlockState[] {
   const loudRef = percentile(features.totalDb, 90);
   const bassRef = percentile(features.energies.bassDb, 90);
   const kickRef = percentile(features.kick, 90) || 1;
@@ -142,7 +142,7 @@ function classifyBars(features: BarFeatures): BlockState[] {
 }
 
 /** Change between the bars before and after each bar line, over several context lengths. */
-function computeNovelty(features: BarFeatures, barCount: number): number[] {
+export function computeNovelty(features: BarFeatures, barCount: number): number[] {
   const columns = [
     features.energies.lowDb,
     features.energies.midDb,
@@ -168,19 +168,33 @@ function computeNovelty(features: BarFeatures, barCount: number): number[] {
   return novelty;
 }
 
-/** Offset of the 8-bar phrase grid that lines up best with the changes. */
-function choosePhraseOrigin(novelty: number[]): number {
-  let best = 0;
-  let bestScore = -Infinity;
-  for (let origin = 0; origin < PHRASE_BARS; origin++) {
-    let score = 0;
-    for (let bar = origin; bar < novelty.length; bar += PHRASE_BARS) score += novelty[bar];
-    if (score > bestScore) {
-      bestScore = score;
-      best = origin;
-    }
+/**
+ * Offset of the 8-bar phrase grid that lines up best with the changes. Only bars where the
+ * change peaks vote (a boundary smears over its neighbours, which must not count twice), and
+ * they vote squared, so a few real boundaries outweigh many small in-phrase ones (a chord
+ * change every bar, say). Bars whose look-ahead window runs past the end of the track are
+ * left out: the ending (fade, silence) reads as the biggest change of all and would align the
+ * grid to where the file stops. It still gets one vote, since tracks usually end on a phrase
+ * line, capped at the strongest boundary inside the track.
+ */
+export function choosePhraseOrigin(novelty: number[], barCount: number): number {
+  // The last bar still fully covered by the longest look-ahead window.
+  const usable = Math.min(novelty.length, barCount - Math.max(...NOVELTY_SCALES) + 1);
+  const isPeak = (bar: number) =>
+    novelty[bar] > 0 && novelty[bar] >= (novelty[bar - 1] ?? -1) && novelty[bar] >= (novelty[bar + 1] ?? -1);
+  const peaks: number[] = [];
+  for (let bar = 1; bar < usable; bar++) if (isPeak(bar)) peaks.push(bar);
+  const cap = Math.max(1, ...peaks.map((bar) => novelty[bar]));
+
+  let ending = -1;
+  for (let bar = Math.max(1, usable); bar < novelty.length; bar++) {
+    if (ending < 0 || novelty[bar] > novelty[ending]) ending = bar;
   }
-  return best;
+
+  const scores = new Array<number>(PHRASE_BARS).fill(0);
+  for (const bar of peaks) scores[bar % PHRASE_BARS] += novelty[bar] ** 2;
+  if (ending >= 0) scores[ending % PHRASE_BARS] += Math.min(novelty[ending], cap) ** 2;
+  return scores.indexOf(Math.max(...scores));
 }
 
 function labelBlocks(

@@ -43,6 +43,22 @@ describe('track analysis', () => {
     expect(analysis.bars.lowDb).toHaveLength(136);
   });
 
+  it('puts the phrase grid on the section boundaries, not on in-phrase chord changes', () => {
+    // 32 bars of chords (a new chord every bar) and hats, then the drop. The bar-to-bar
+    // chord changes must not outvote the one real boundary at bar 32.
+    const track = synthesizeTrack({
+      bpm: 126,
+      firstDownbeat: 0.25,
+      sections: [{ bars: 32, chords: true, hats: true }, { bars: 64, ...FULL }, { bars: 16, kick: true, hats: true }],
+    });
+    const analysis = analyzeAudio(track.channels.map((c) => c.map((v) => v * 0.5)), track.sampleRate);
+    expect(analysis.phrases.map((p) => [p.label, p.startBar])).toEqual([
+      ['intro', 0],
+      ['drop', 32],
+      ['outro', 96],
+    ]);
+  });
+
   it('keeps slower house in its own octave', () => {
     const track = synthesizeTrack({ bpm: 100, firstDownbeat: 1.234, sections: HOUSE_ARRANGEMENT });
     expect(analyzeAudio(track.channels, track.sampleRate).bpm).toBeCloseTo(100, 2);
