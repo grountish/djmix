@@ -10,7 +10,7 @@ import {
 import { sequencerTrackFromAnalysis, suggestNext } from '@/audio/mix/sequencer';
 import { trackClock } from '@/audio/mix/trackClock';
 import type { DeckState, Track } from '@/types';
-import { useApp } from './AppContext';
+import { type NextMix, useApp } from './AppContext';
 
 type DeckId = 'A' | 'B';
 
@@ -90,20 +90,41 @@ export function useAutoDj(): void {
     });
   }, [state.automix, state.deckA, state.deckB, state.queue, state.played, state.tracks, actions]);
 
-  // Arm the transition when it is nearly due; until then, count down.
+  // Preview the next mix (Auto's, at the end of the track; otherwise what Mix now would do) for
+  // the inspector, and with Auto on arm it when it is nearly due; until then, count down.
   useEffect(() => {
     const timer = setInterval(() => {
       const { state, actions } = latest.current;
-      if (!state.automix.enabled || state.automix.isTransitioning) return;
+      const { automix } = state;
+      if (automix.isTransitioning) return;
+      const clearNext = () => {
+        if (automix.next && !automix.next.live) actions.setAutomixNext(null);
+      };
       const decks = autoDecks(state.deckA, state.deckB, state.played);
       const idleTrack = decks?.idle.deck.track;
-      if (!decks || !idleTrack || decks.used.has(idleTrack.id) || armedFor.current === idleTrack.id) return;
+      if (!decks || !idleTrack || (automix.enabled && decks.used.has(idleTrack.id))) return clearNext();
       const outgoing = effectiveAnalysis(decks.current.track);
       const incoming = effectiveAnalysis(idleTrack);
-      if (!outgoing || !incoming) return;
+      if (!outgoing || !incoming) return clearNext();
 
-      const plan = previewTransition(decks.current.id, outgoing, incoming, 'end');
-      if (!plan) return;
+      const timing = automix.enabled ? 'end' : 'now';
+      const chosen = automix.startBar;
+      const startBar = chosen && chosen.trackId === decks.current.track.id ? chosen.bar : undefined;
+      const plan = previewTransition(decks.current.id, outgoing, incoming, timing, startBar);
+      if (!plan) return clearNext();
+
+      const next: NextMix = {
+        outgoing: decks.current.id,
+        incoming: decks.idle.id,
+        outgoingTrackId: decks.current.track.id,
+        incomingTrackId: idleTrack.id,
+        timing,
+        live: false,
+        plan,
+      };
+      if (!automix.next?.live && !samePlan(automix.next, next)) actions.setAutomixNext(next);
+
+      if (!automix.enabled || armedFor.current === idleTrack.id) return;
       // Park the next track on its cue point, so the deck shows where it will come in.
       const cueTime = trackClock(incoming).timeOf(plan.incomingStartBar * 4);
       const cued = decks.idle.deck.cuePoint;
@@ -116,10 +137,31 @@ export function useAutoDj(): void {
       }
       const untilHeard = secondsUntilOverlap(decks.current.id, outgoing, plan);
       const status = `Mixing in ${formatCountdown(untilHeard)} → ${idleTrack.title || idleTrack.fileName} · ${describePlan(plan)}`;
-      if (status !== state.automix.status) actions.setAutomixStatus(status);
+      if (status !== automix.status) actions.setAutomixStatus(status);
     }, CHECK_INTERVAL_MS);
     return () => clearInterval(timer);
   }, []);
+}
+
+/** Whether two previews would draw and read the same (the plan's timing moves with the deck). */
+function samePlan(a: NextMix | null, b: NextMix): boolean {
+  if (!a) return false;
+  const key = (n: NextMix) =>
+    [
+      n.outgoing,
+      n.outgoingTrackId,
+      n.incomingTrackId,
+      n.timing,
+      n.plan.kind,
+      n.plan.overlapBars,
+      n.plan.outgoingStartBar,
+      n.plan.incomingStartBar,
+      n.plan.bassSwapBar,
+      n.plan.outgoingLoop?.startBar ?? -1,
+      n.plan.outgoingLoop?.bars ?? 0,
+      n.plan.warnings.join('|'),
+    ].join(',');
+  return key(a) === key(b);
 }
 
 /** The queue's first playable track, else the library track that mixes best from `current`. */

@@ -2,9 +2,6 @@ import React, { createContext, useContext, useReducer, useCallback, useEffect, u
 import type { AnalysisOverrides, Track, DeckState, EqBand, PlaybackMode, SortOption, FilterOptions } from '@/types';
 import { effectiveAnalysis } from '@/audio/analysis/overrides';
 import { mergeTracks } from './library';
-
-/** Fields to merge into one track. */
-export type TrackPatch = Pick<Track, 'id'> & Partial<Track>;
 import {
   loadAudioBufferToDeck,
   playDeck,
@@ -31,9 +28,31 @@ import {
 import { cancelTransition, describePlan, formatCountdown, startAutomixTransition } from '@/audio/automixController';
 import { orderSet, sequencerTrackFromAnalysis, type TempoDirection } from '@/audio/mix/sequencer';
 import type { MixTiming } from '@/audio/mix/mixPoints';
+import type { TransitionPlan } from '@/audio/mix/planner';
 import { eqDbToGain } from '@/audio/mix/templates';
 import { eqGainToKnob } from '@/audio/engine/curves';
 import { installTestBridge } from '@/testBridge';
+
+/** Fields to merge into one track. */
+export type TrackPatch = Pick<Track, 'id'> & Partial<Track>;
+
+/** The transition coming up (or running): which deck goes where, and the plan. */
+export interface NextMix {
+  outgoing: 'A' | 'B';
+  incoming: 'A' | 'B';
+  outgoingTrackId: string;
+  incomingTrackId: string;
+  timing: MixTiming;
+  /** True while this plan is being played. */
+  live: boolean;
+  plan: TransitionPlan;
+}
+
+/** The user's choice of outgoing bar for the next mix to start on, for one track. */
+export interface MixStartBar {
+  trackId: string;
+  bar: number;
+}
 
 export interface AppState {
   tracks: Track[];
@@ -56,6 +75,9 @@ export interface AppState {
     status: string | null;
     /** Which way the set's tempo travels when automix orders or picks tracks. */
     direction: TempoDirection;
+    /** The mix coming up (Auto's, or what Mix now would do), or the one running. */
+    next: NextMix | null;
+    startBar: MixStartBar | null;
   };
 }
 
@@ -86,7 +108,9 @@ type Action =
   | { type: 'SET_AUTOMIX_STATUS'; status: string | null }
   | { type: 'SET_AUTOMIX_DIRECTION'; direction: TempoDirection }
   | { type: 'SET_QUEUE'; queue: string[] }
-  | { type: 'MARK_PLAYED'; trackId: string };
+  | { type: 'MARK_PLAYED'; trackId: string }
+  | { type: 'SET_AUTOMIX_NEXT'; next: NextMix | null }
+  | { type: 'SET_MIX_START_BAR'; startBar: MixStartBar | null };
 
 const createInitialDeckState = (): DeckState => ({
   track: null,
@@ -121,6 +145,8 @@ const initialState: AppState = {
     activeDeck: null,
     status: null,
     direction: 'up',
+    next: null,
+    startBar: null,
   },
 };
 
@@ -185,6 +211,9 @@ function reducer(state: AppState, action: Action): AppState {
       const deckKey = action.deck === 'A' ? 'deckA' : 'deckB';
       return {
         ...state,
+        // A track put on a deck is up for playing again, even if it was played (or skipped)
+        // earlier in the set; Auto would otherwise refuse to mix into it.
+        played: action.track ? state.played.filter((id) => id !== action.track!.id) : state.played,
         [deckKey]: {
           ...state[deckKey],
           track: action.track,
@@ -316,6 +345,12 @@ function reducer(state: AppState, action: Action): AppState {
     case 'SET_AUTOMIX_DIRECTION':
       return { ...state, automix: { ...state.automix, direction: action.direction } };
 
+    case 'SET_AUTOMIX_NEXT':
+      return { ...state, automix: { ...state.automix, next: action.next } };
+
+    case 'SET_MIX_START_BAR':
+      return { ...state, automix: { ...state.automix, startBar: action.startBar } };
+
     case 'SET_QUEUE':
       return { ...state, queue: action.queue };
 
@@ -372,6 +407,14 @@ interface AppContextValue {
     smartOrderQueue: () => void;
     setAutomixDirection: (direction: TempoDirection) => void;
     markPlayed: (trackId: string) => void;
+    /** The upcoming transition, as the Auto DJ hook previews it. */
+    setAutomixNext: (next: NextMix | null) => void;
+    /** Moves the next mix's entry by `bars` on the outgoing track (the planner may adjust). */
+    nudgeMixStart: (bars: number) => void;
+    /** Back to the planner's own choice of entry. */
+    resetMixStart: () => void;
+    /** Drops the track cued on the idle deck; Auto picks another. */
+    skipNext: () => void;
   };
 }
 
@@ -394,6 +437,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const releaseAutomix = useCallback((reason: string) => {
     const cancelled = cancelTransition();
     if (!cancelled) return;
+    dispatch({ type: 'SET_AUTOMIX_NEXT', next: null });
     const current = stateRef.current;
     for (const id of ['A', 'B'] as const) {
       const deck = id === 'A' ? current.deckA : current.deckB;
@@ -654,6 +698,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       // The status line counts down to the moment the next track is heard, then names the mix.
       const targetName = target.track?.title || target.track?.fileName;
       let planText = '';
+      const chosen = stateRef.current.automix.startBar;
+      const startBar = chosen && chosen.trackId === sourceTrackId ? chosen.bar : undefined;
       const plan = startAutomixTransition(sourceDeckId, sourceAnalysis, targetAnalysis, timing, {
         onIncomingStarted: () => {
           incomingStarted = true;
@@ -673,6 +719,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           dispatch({ type: 'SET_AUTOMIX_TRANSITIONING', isTransitioning: false });
           dispatch({ type: 'SET_AUTOMIX_ACTIVE_DECK', deck: targetDeckId });
           dispatch({ type: 'MARK_PLAYED', trackId: sourceTrackId });
+          dispatch({ type: 'SET_AUTOMIX_NEXT', next: null });
+          dispatch({ type: 'SET_MIX_START_BAR', startBar: null });
           dispatch({ type: 'SET_AUTOMIX_STATUS', status: `Mixed into ${target.track?.title || target.track?.fileName}` });
         },
         onTick: (rates, lanes, secondsToStart) => {
@@ -709,11 +757,23 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             }
           }
         },
-      });
+      }, startBar);
       if (!plan) {
         dispatch({ type: 'SET_AUTOMIX_STATUS', status: 'Mix: could not start the transition' });
         return;
       }
+      dispatch({
+        type: 'SET_AUTOMIX_NEXT',
+        next: {
+          outgoing: sourceDeckId,
+          incoming: targetDeckId,
+          outgoingTrackId: sourceTrackId,
+          incomingTrackId: target.track!.id,
+          timing,
+          live: true,
+          plan,
+        },
+      });
 
       dispatch({ type: 'SET_CROSSFADER', value: 0 });
       dispatch({ type: 'SET_DECK_MODE', deck: 'A', mode: 'stretch' });
@@ -770,6 +830,40 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
     markPlayed: useCallback((trackId: string) => {
       dispatch({ type: 'MARK_PLAYED', trackId });
+    }, []),
+
+    setAutomixNext: useCallback((next: NextMix | null) => {
+      dispatch({ type: 'SET_AUTOMIX_NEXT', next });
+    }, []),
+
+    nudgeMixStart: useCallback((bars: number) => {
+      const { next, startBar } = stateRef.current.automix;
+      if (!next || next.live) return;
+      const from = startBar && startBar.trackId === next.outgoingTrackId ? startBar.bar : next.plan.outgoingStartBar;
+      dispatch({ type: 'SET_MIX_START_BAR', startBar: { trackId: next.outgoingTrackId, bar: Math.max(0, from + bars) } });
+    }, []),
+
+    resetMixStart: useCallback(() => {
+      dispatch({ type: 'SET_MIX_START_BAR', startBar: null });
+    }, []),
+
+    skipNext: useCallback(() => {
+      const { deckA, deckB, automix } = stateRef.current;
+      if (automix.isTransitioning) return;
+      // The deck the preview would mix into; without a preview, the idle deck beside a playing one.
+      const decks = { A: deckA, B: deckB };
+      let id: 'A' | 'B' | null = automix.next && !automix.next.live ? automix.next.incoming : null;
+      if (!id) {
+        const playing = (['A', 'B'] as const).filter((d) => decks[d].playback.isPlaying);
+        if (playing.length === 1) id = playing[0] === 'A' ? 'B' : 'A';
+      }
+      const track = id && decks[id].track;
+      if (!id || !track || decks[id].playback.isPlaying) return;
+      forceStopDeck(id);
+      dispatch({ type: 'MARK_PLAYED', trackId: track.id });
+      dispatch({ type: 'SET_DECK_TRACK', deck: id, track: null });
+      dispatch({ type: 'SET_AUTOMIX_NEXT', next: null });
+      dispatch({ type: 'SET_MIX_START_BAR', startBar: null });
     }, []),
   };
 

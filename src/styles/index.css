@@ -215,6 +215,58 @@ select {
   white-space: nowrap;
 }
 
+/* Next mix (top bar) */
+.nextmix {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.nextmix-text {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.nextmix.auto-on .nextmix-text {
+  color: var(--green);
+}
+
+.nextmix-controls {
+  display: flex;
+  gap: 3px;
+  flex: none;
+}
+
+.nextmix-btn {
+  height: 20px;
+  padding: 0 7px;
+  border-radius: 3px;
+  border: 1px solid var(--line-2);
+  background: var(--panel-3);
+  color: var(--text-2);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+}
+
+.nextmix-btn:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--text-3);
+}
+
+.nextmix-btn.set {
+  color: var(--yellow);
+  border-color: var(--yellow);
+}
+
 .decks {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 252px minmax(0, 1fr);

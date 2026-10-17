@@ -4,7 +4,7 @@ import { effectiveAnalysis, hasCorrections, resolveOverrides } from '@/audio/ana
 import { trackClock } from '@/audio/mix/trackClock';
 import { KeyBadge } from './KeyBadge';
 import { OverrideControls } from './OverrideControls';
-import { Waveform, EmptyWaveform } from './Waveform';
+import { Waveform, EmptyWaveform, type MixMarks } from './Waveform';
 
 /** Drag type library rows carry; decks accept it. */
 export const TRACK_DRAG_TYPE = 'application/x-djmix-track';
@@ -22,6 +22,8 @@ interface DeckProps {
   onPitchChange: (rate: number) => void;
   onOverridesChange: (trackId: string, overrides: AnalysisOverrides | undefined) => void;
   onDropTrack: (trackId: string) => void;
+  /** The next mix, drawn on the waveform. */
+  mixMarks?: MixMarks | null;
 }
 
 export function formatTime(seconds: number): string {
@@ -46,6 +48,7 @@ export function Deck({
   onPitchChange,
   onOverridesChange,
   onDropTrack,
+  mixMarks,
 }: DeckProps) {
   const { track, playback, targetBpm, playbackMode, cuePoint } = state;
   const [targetBpmInput, setTargetBpmInput] = useState(targetBpm?.toString() || '');
@@ -163,6 +166,7 @@ export function Deck({
               clock={clock}
               phrases={analysis?.phrases}
               cuePoint={cuePoint}
+              marks={mixMarks}
               onSeek={onSeek}
             />
           ) : (

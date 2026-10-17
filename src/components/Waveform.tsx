@@ -2,6 +2,21 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import type { BeatClock } from '@/audio/analysis/beatClock';
 import type { Phrase, PhraseLabel, SpectralWaveform } from '@/types';
 
+/** The next mix, in this track's bars, for drawing on its waveform. */
+export interface MixMarks {
+  role: 'outgoing' | 'incoming';
+  /** Bar the overlap starts on (incoming track enters / this track enters). */
+  startBar: number;
+  /** 0 for a cut. */
+  overlapBars: number;
+  /** Bar of the bass swap. */
+  swapBar: number;
+  /** Outgoing track only: the phrase repeated under the blend. */
+  loop?: { startBar: number; bars: number };
+  /** True while the mix is being played. */
+  live: boolean;
+}
+
 interface WaveformProps {
   data: number[];
   spectralData?: SpectralWaveform;
@@ -12,6 +27,7 @@ interface WaveformProps {
   clock?: BeatClock;
   phrases?: Phrase[];
   cuePoint?: number | null;
+  marks?: MixMarks | null;
   onSeek: (time: number) => void;
 }
 
@@ -38,6 +54,84 @@ function spectralColor(low: number, mid: number, high: number): string {
 const WAVE_BG = '#0b0b0f';
 const PLAYHEAD = '#ff5a3c';
 const CUE = '#ffffff';
+const MARK_RGB: Record<MixMarks['role'], string> = { outgoing: '255,139,31', incoming: '95,193,74' };
+const LOOP_RGB = '232,197,71';
+
+/**
+ * Draws the next mix over a waveform: the overlap as a band, the entry and bass swap as lines
+ * (labelled when `labels`), the looped phrase hatched. `x(time)` maps track time to a pixel
+ * and may return values outside [0, w].
+ */
+function drawMarks(
+  ctx: CanvasRenderingContext2D,
+  marks: MixMarks,
+  clock: BeatClock,
+  x: (time: number) => number,
+  w: number,
+  h: number,
+  labels: boolean,
+): void {
+  const rgb = MARK_RGB[marks.role];
+  const alpha = marks.live ? 1 : 0.7;
+  const barX = (bar: number) => x(clock.timeOf(bar * 4));
+  const loopEnd = marks.loop ? marks.loop.startBar + marks.loop.bars : Infinity;
+  const x0 = barX(marks.startBar);
+  // The band stops at the loop's end: from there the track repeats and can't be drawn in line.
+  const x1 = barX(Math.min(marks.startBar + marks.overlapBars, loopEnd));
+  const visible = (a: number, b: number) => b >= 0 && a <= w;
+  ctx.save();
+  if (marks.overlapBars > 0 && visible(x0, x1)) {
+    const left = Math.max(0, x0);
+    const right = Math.min(w, x1);
+    ctx.fillStyle = `rgba(${rgb},${0.2 * alpha})`;
+    ctx.fillRect(left, 0, right - left, h);
+    // A solid strip along the top edge: visible however dense the waveform under it is.
+    ctx.fillStyle = `rgba(${rgb},${0.9 * alpha})`;
+    ctx.fillRect(left, 0, right - left, labels ? 3 : 2);
+  }
+  if (marks.loop) {
+    const lx0 = barX(marks.loop.startBar);
+    const lx1 = barX(loopEnd);
+    if (visible(lx0, lx1)) {
+      ctx.fillStyle = `rgba(${LOOP_RGB},${0.12 * alpha})`;
+      ctx.fillRect(Math.max(0, lx0), 0, Math.min(w, lx1) - Math.max(0, lx0), h);
+      ctx.strokeStyle = `rgba(${LOOP_RGB},${0.9 * alpha})`;
+      ctx.lineWidth = 1;
+      ctx.setLineDash([3, 3]);
+      for (const lx of [lx0, lx1]) {
+        if (lx < 0 || lx > w) continue;
+        ctx.beginPath();
+        ctx.moveTo(Math.floor(lx) + 0.5, 0);
+        ctx.lineTo(Math.floor(lx) + 0.5, h);
+        ctx.stroke();
+      }
+      ctx.setLineDash([]);
+      if (labels && lx0 >= 0 && lx0 <= w) {
+        ctx.fillStyle = `rgba(${LOOP_RGB},${alpha})`;
+        ctx.fillText('LOOP', lx0 + 4, h - 12);
+      }
+    }
+  }
+  const line = (px: number, label: string, dashed: boolean) => {
+    if (px < 0 || px > w) return;
+    ctx.strokeStyle = `rgba(${rgb},${alpha})`;
+    ctx.lineWidth = dashed ? 1 : 2;
+    ctx.setLineDash(dashed ? [4, 3] : []);
+    ctx.beginPath();
+    ctx.moveTo(Math.floor(px) + 0.5, 0);
+    ctx.lineTo(Math.floor(px) + 0.5, h);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    if (labels) {
+      ctx.fillStyle = `rgba(${rgb},${alpha})`;
+      ctx.fillText(label, px + 4, h - 12);
+    }
+  };
+  const entry = marks.overlapBars === 0 ? 'CUT' : marks.role === 'incoming' ? 'IN' : 'MIX';
+  line(x0, entry, false);
+  if (marks.overlapBars > 0 && marks.swapBar < loopEnd) line(barX(marks.swapBar), 'SWAP', true);
+  ctx.restore();
+}
 
 // Zoom levels in bars (4 beats per bar)
 const ZOOM_LEVELS = [2, 4, 8, 16, 32];
@@ -66,6 +160,7 @@ export function Waveform({
   clock,
   phrases,
   cuePoint,
+  marks,
   onSeek,
 }: WaveformProps) {
   const [zoomIndex, setZoomIndex] = useState(DEFAULT_ZOOM_INDEX);
@@ -170,6 +265,13 @@ export function Waveform({
         }
       }
 
+      // The next mix.
+      if (marks && clock) {
+        ctx.font = '700 9px -apple-system, "Segoe UI", sans-serif';
+        ctx.textBaseline = 'top';
+        drawMarks(ctx, marks, clock, (time) => ((time - windowStart) / windowDuration) * w, w, h, true);
+      }
+
       // Cue point.
       if (cuePoint !== null && cuePoint !== undefined && cuePoint >= windowStart && cuePoint <= windowEnd) {
         const x = Math.floor(((cuePoint - windowStart) / windowDuration) * w) + 0.5;
@@ -207,7 +309,7 @@ export function Waveform({
 
     rafRef.current = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(rafRef.current);
-  }, [data, spectralData, currentTime, duration, windowStart, windowEnd, windowDuration, bpm, clock, phrases, cuePoint, width]);
+  }, [data, spectralData, currentTime, duration, windowStart, windowEnd, windowDuration, bpm, clock, phrases, cuePoint, marks, width]);
 
   // Overview: the whole track pre-rendered once, then composited with the viewport and playhead.
   const cachedOverviewRef = useRef<HTMLCanvasElement | null>(null);
@@ -291,6 +393,8 @@ export function Waveform({
     ctx.lineWidth = 1;
     ctx.strokeRect(Math.floor(viewportStart * w) + 0.5, 0.5, Math.max(2, viewportWidth * w) - 1, h - 1);
 
+    if (marks && clock && duration > 0) drawMarks(ctx, marks, clock, (time) => (time / duration) * w, w, h, false);
+
     if (cuePoint !== null && cuePoint !== undefined && duration > 0) {
       const x = Math.floor((cuePoint / duration) * w) + 0.5;
       ctx.strokeStyle = CUE;
@@ -307,7 +411,7 @@ export function Waveform({
     ctx.moveTo(playheadX, 0);
     ctx.lineTo(playheadX, h);
     ctx.stroke();
-  }, [overviewPlayhead, viewportStart, viewportWidth, cuePoint, duration, width, data, spectralData, phrases, clock]);
+  }, [overviewPlayhead, viewportStart, viewportWidth, cuePoint, marks, duration, width, data, spectralData, phrases, clock]);
 
   const handleOverviewClick = useCallback(
     (e: React.MouseEvent<HTMLCanvasElement>) => {

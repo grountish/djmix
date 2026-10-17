@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useApp, type TrackPatch } from '@/store/AppContext';
 import { dedupeTracks } from '@/store/library';
 import { Browser, Deck, Mixer } from '@/components';
+import { NextMix } from '@/components/NextMix';
+import type { MixMarks } from '@/components/Waveform';
 import { useAutoDj } from '@/store/useAutoDj';
 import {
   importFiles,
@@ -210,6 +212,36 @@ export function App() {
     [state.queue, actions],
   );
 
+  // The next mix, in each deck's own bars, for the waveforms.
+  const next = state.automix.next;
+  const marksFor = (deck: 'A' | 'B'): MixMarks | null => {
+    if (!next) return null;
+    const track = (deck === 'A' ? state.deckA : state.deckB).track;
+    const { plan } = next;
+    if (next.outgoing === deck && track?.id === next.outgoingTrackId) {
+      return {
+        role: 'outgoing',
+        startBar: plan.outgoingStartBar,
+        overlapBars: plan.overlapBars,
+        swapBar: plan.outgoingStartBar + plan.bassSwapBar,
+        loop: plan.outgoingLoop,
+        live: next.live,
+      };
+    }
+    if (next.incoming === deck && track?.id === next.incomingTrackId) {
+      return {
+        role: 'incoming',
+        startBar: plan.incomingStartBar,
+        overlapBars: plan.overlapBars,
+        swapBar: plan.incomingStartBar + plan.bassSwapBar,
+        live: next.live,
+      };
+    }
+    return null;
+  };
+  const incomingTrack = next ? (next.incoming === 'A' ? state.deckA : state.deckB).track : null;
+  const moved = !!next && !!state.automix.startBar && state.automix.startBar.trackId === next.outgoingTrackId;
+
   const playingDeck = [state.deckA, state.deckB].find((d) => d.playback.isPlaying && d.track);
   const playingBpm = playingDeck?.track ? effectiveAnalysis(playingDeck.track)?.bpm : undefined;
   const masterBpm = playingBpm ? playingBpm * playingDeck!.playback.playbackRate : null;
@@ -223,9 +255,17 @@ export function App() {
           <span className="clock-value">{masterBpm ? masterBpm.toFixed(2) : '—'}</span>
           <span className="clock-label">BPM</span>
         </div>
-        <span className={`topbar-status ${state.automix.enabled ? 'auto-on' : ''}`} title={state.automix.status ?? ''}>
-          {state.automix.status ?? (state.automix.enabled ? 'Auto: waiting for a playing deck' : '')}
-        </span>
+        <NextMix
+          next={next}
+          status={state.automix.status}
+          autoEnabled={state.automix.enabled}
+          incomingName={incomingTrack ? incomingTrack.title || incomingTrack.fileName : null}
+          moved={moved}
+          onEarlier={() => actions.nudgeMixStart(-8)}
+          onLater={() => actions.nudgeMixStart(8)}
+          onReset={actions.resetMixStart}
+          onSkip={actions.skipNext}
+        />
         <span className="topbar-meta">
           {analysing > 0 ? `Analysing ${analysing} of ${state.tracks.length}` : `${state.tracks.length} tracks`}
         </span>
@@ -245,6 +285,7 @@ export function App() {
           onPitchChange={(rate) => actions.setDeckPitch('A', rate)}
           onOverridesChange={actions.setTrackOverrides}
           onDropTrack={(id) => loadTrackId('A', id)}
+          mixMarks={marksFor('A')}
         />
 
         <Mixer
@@ -277,6 +318,7 @@ export function App() {
           onPitchChange={(rate) => actions.setDeckPitch('B', rate)}
           onOverridesChange={actions.setTrackOverrides}
           onDropTrack={(id) => loadTrackId('B', id)}
+          mixMarks={marksFor('B')}
         />
       </main>
 
