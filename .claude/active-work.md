@@ -7,7 +7,12 @@ finish; delete entries that are over. Don't edit files another entry lists as in
 Shared dev server: Vite on :5173 (+ Electron). The live tests (`npm run test:live`) start their
 own Vite on :5174 with HMR off, so edits don't reload the page under a running test.
 
-## Session a131b68b — "10 improvements" batch — FINISHED 2026-10-18, nothing in progress
+## Session a131b68b — layout: smaller decks/mixer, more room for the playlist (2026-10-18)
+
+IN PROGRESS, touching ONLY `src/styles/index.css` (deck, wave, mixer, knob, fader sizes) and, if a
+markup change is unavoidable, `src/components/Mixer.tsx` / `Deck.tsx` / `Waveform.tsx` (announced here first).
+
+## Session a131b68b — "10 improvements" batch — FINISHED 2026-10-18
 
 All four items are on main; every file below is free.
 1. DONE `9e3aa19` Waveform cache, no decoding at startup.
