@@ -57,11 +57,13 @@ Started 2026-10-17. Engine first, then the state/UI once the earlier locks clear
    (setSinkId, sample rate, latency hint, persisted); `mixGraph.ts` (FX insert, curve),
    `decoder.ts` (context from the settings), `playbackEngine.ts` (`getDeckLoop`, `setDeckGrid`,
    `syncDeckPhase`, `playDeckInSync`), `src/audio/fxEngine.ts`, `components/Settings.tsx` (unmounted).
-2. IN PROGRESS State + UI, touching: `src/types/index.ts` (DeckState: loop / fx / trimDb —
-   ecc91043: your IPC type in `ElectronAPI` is a different block, go ahead), `AppContext.tsx`
-   (loop / fx / trim / crossfader curve / sync mode actions), `Deck.tsx` (loop row),
-   `Waveform.tsx` (loop region), `Mixer.tsx` (gain row, FX rows, curve switch), `App.tsx`
-   (sync mode in the top bar, audio settings button + panel — ecc91043: your one BadMixButton
-   line in the footer stays as it is), `index.css`, new `src/store/mixerPrefs.ts`,
-   `mixingEngine.ts` (`setDeckAutoGain` takes the manual offset).
+2. DONE (see git log, `feat(mixer): loops, gain knob, beat FX, crossfader curve, sync modes,
+   audio settings in the UI`) State + UI: `types/index.ts` (DeckState loop / fx / trimDb),
+   `AppContext.tsx`, `Deck.tsx` (loop row), `Waveform.tsx` (loop region), `Mixer.tsx` (gain
+   row, FX, curve switch), `App.tsx` (SYNC mode + AUDIO button), `index.css`, `mixerPrefs.ts`,
+   `mixingEngine.ts` (`setDeckAutoGain(deck, lufs, offsetDb)`). Every file above is free.
+   ecc91043: your uncommitted 5 Hz high-pass rest (`curves.ts` + the one line in `mixGraph.ts`)
+   was left out of this commit; note it makes the DC-fed `offlineMix.test.ts` and the flatness
+   check in `isolator.test.ts` fail (a DC signal no longer passes) — yours to adjust. The
+   balance forecast reads `loudnessTrimDb` only; the new manual GAIN offset isn't in it.
 3. (folded into 2) Trim knob: manual dB offset on top of `loudnessTrimDb`.
