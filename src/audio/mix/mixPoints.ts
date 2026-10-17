@@ -84,6 +84,8 @@ const LATE_WEIGHT = 1;
 const DROP_DELAY_WEIGHT = 0.05;
 /** Intro bars before the first phrase line that are played rather than skipped. */
 const MAX_PICKUP_BARS = 2;
+/** Per bar of the incoming track skipped past its first drop. */
+const SKIP_WEIGHT = 0.05;
 
 /**
  * Where to mix. Both tracks change on their phrase grids at the same moment. Every
@@ -106,9 +108,12 @@ export function chooseMixPoints(input: MixPointInput): MixPoints {
   const nowEntries = input.timing === 'now' ? entryBars(outgoing.phrases, outgoing.barCount, originOut) : [];
   const firstEntry = nowEntries.find((bar) => bar >= earliest);
 
-  // Cues sit on the incoming phrase grid, so its phrases land on the outgoing ones.
+  // Cues sit on the incoming phrase grid, so its phrases land on the outgoing ones. They reach
+  // as far as its last drop: a track whose first kick section is short may be better entered
+  // later, at the cost of the music skipped.
+  const lastEntry = entries.length ? entries[entries.length - 1] : drop;
   const cues: number[] = [];
-  for (let bar = 0; bar <= drop; bar++) if (onGrid(bar, originIn)) cues.push(bar);
+  for (let bar = 0; bar <= lastEntry; bar++) if (onGrid(bar, originIn)) cues.push(bar);
   if (cues.length === 0) cues.push(0);
 
   let best: (MixPoints & { score: number }) | null = null;
@@ -128,7 +133,7 @@ export function chooseMixPoints(input: MixPointInput): MixPoints {
         input.timing === 'now' ? LATE_WEIGHT * (start - (firstEntry ?? start)) : EARLY_WEIGHT * (latest - start);
       for (const cue of cues) {
         for (const swap of swapCandidates(overlap, cue, entries, start, exits)) {
-          let score = LENGTH_WEIGHT * overlap - timing;
+          let score = LENGTH_WEIGHT * overlap - timing - SKIP_WEIGHT * Math.max(0, cue - drop);
           // Before the swap the outgoing kick carries the beat; the incoming carries it after,
           // and should have a groove to enter on before.
           score -= BEATLESS_WEIGHT * countFalse(kickOut, start, swap) ** 2;

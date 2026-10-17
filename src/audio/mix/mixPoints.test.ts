@@ -94,7 +94,8 @@ describe('chooseMixPoints', () => {
     // kick must cover the build, so the swap waits for the drop at bar 21.
     const incoming = phrases(['drop', 13], ['build', 8, { kick: false, bass: true }], ['drop', 176], ['outro', 25, { kick: false, bass: false }]);
     const points = chooseMixPoints({ ...input, incoming: { phrases: incoming, barCount: 222 } });
-    expect(points.incomingStartBar).toBe(0);
+    // Phrase lines run from bar 5 (13 − 8): the cue sits on the first one.
+    expect(points.incomingStartBar).toBe(5);
     expect(points.incomingStartBar + points.bassSwapBar).toBe(21);
   });
 
@@ -117,6 +118,23 @@ describe('chooseMixPoints', () => {
     const points = chooseMixPoints({ ...input, incoming: { phrases: incoming, barCount: 85 } });
     expect(points.incomingStartBar).toBe(5);
     expect(points.overlapBars).toBe(32);
+  });
+
+  it('enters at a later drop when the first kick section is too short to blend over', () => {
+    // A 7-bar kick intro (phrase lines from bar 7), an 8-bar drop, a 48-bar kickless breakdown,
+    // then a long drop: a blend over the breakdown would lose the beat and an 8-bar blend is
+    // too short, so cue a phrase before the later drop.
+    const incoming = phrases(
+      ['intro', 7, { kick: true }],
+      ['drop', 8],
+      ['breakdown', 48, { kick: false, bass: true }],
+      ['drop', 64],
+      ['outro', 17],
+    );
+    const points = chooseMixPoints({ ...input, incoming: { phrases: incoming, barCount: 144 } });
+    expect(points.overlapBars).toBe(32);
+    expect(points.incomingStartBar).toBe(55);
+    expect(points.bassSwapBar).toBe(8);
   });
 
   it('brings a track that starts at full energy in with an early swap, not a short blend', () => {

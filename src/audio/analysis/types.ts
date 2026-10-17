@@ -1,5 +1,5 @@
 /** Bumped whenever analysis output changes, so cached results are recomputed. */
-export const ANALYZER_VERSION = 6;
+export const ANALYZER_VERSION = 7;
 
 export type PhraseLabel = 'intro' | 'build' | 'drop' | 'breakdown' | 'outro';
 

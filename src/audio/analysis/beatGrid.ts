@@ -38,6 +38,13 @@ const MIN_WINDOW_CORRELATION = 0.6;
 const MIN_WINDOW_PUNCH = 1.5;
 /** Search range once the grid is close. */
 const REFINE_SEARCH = 0.03;
+/** Windows (s after a beat) over which low-band punch is read: the hit, and its tail. */
+const PUNCH_EARLY: [number, number] = [0.005, 0.045];
+const PUNCH_LATE: [number, number] = [0.12, 0.2];
+/** The half-beat must carry at least this share of the beat's low-band level to be considered… */
+const HALF_BEAT_MIN_LEVEL = 0.8;
+/** …and decay this many dB more than the beat does. */
+const HALF_BEAT_MIN_PUNCH_DB = 3;
 const MIN_OUTLIER_LIMIT = 0.004;
 const CONSTANT_TEMPO_MAX_RESIDUAL_MS = 3;
 /**
@@ -91,6 +98,15 @@ export function fitBeatGrid(
 
   const envelope = kickEnvelope(mono, sampleRate);
   const lastBeat = () => Math.floor((duration - beatTime) / period) - 1;
+
+  // The onset fold can land on an off-beat bassline instead of the kick when both hit as hard.
+  // A kick decays within a fifth of a second; a held bass note doesn't. When the half-beat
+  // positions are as loud and clearly more percussive, the grid moves onto them.
+  const onBeat = lowBandPunch(envelope, beatTime, period, lastBeat());
+  const offBeat = lowBandPunch(envelope, beatTime + period / 2, period, lastBeat());
+  if (offBeat.early >= HALF_BEAT_MIN_LEVEL * onBeat.early && offBeat.decayDb >= onBeat.decayDb + HALF_BEAT_MIN_PUNCH_DB) {
+    beatTime += period / 2;
+  }
 
   let windows: WindowMeasurement[] = [];
   let fit: LineFit | null = null;
@@ -317,6 +333,40 @@ function averageKick(envelope: KickEnvelope, beatTimes: number[], period: number
 
 function gridBeats(beatTime: number, period: number, from: number, to: number): number[] {
   return Array.from({ length: Math.max(0, to - from + 1) }, (_, i) => beatTime + (from + i) * period);
+}
+
+/**
+ * How percussive the low band is on a grid: mean envelope just after each beat, and how far
+ * it has decayed (dB) 120–200 ms later. Beats without low-band energy are skipped.
+ */
+function lowBandPunch(
+  envelope: KickEnvelope,
+  beatTime: number,
+  period: number,
+  lastBeat: number,
+): { early: number; decayDb: number } {
+  const mean = (from: number, to: number) => {
+    let sum = 0;
+    let n = 0;
+    for (let t = from; t < to; t += 1 / envelope.rate) {
+      sum += envelopeAt(envelope, t);
+      n++;
+    }
+    return n ? sum / n : 0;
+  };
+  let early = 0;
+  let late = 0;
+  let beats = 0;
+  for (let k = 0; k <= lastBeat; k++) {
+    const t = beatTime + k * period;
+    const e = mean(t + PUNCH_EARLY[0], t + PUNCH_EARLY[1]);
+    if (e <= 0) continue;
+    early += e;
+    late += mean(t + PUNCH_LATE[0], t + PUNCH_LATE[1]);
+    beats++;
+  }
+  if (beats === 0) return { early: 0, decayDb: 0 };
+  return { early: early / beats, decayDb: 10 * Math.log10(early / Math.max(late, 1e-12)) };
 }
 
 /** Where the average kick crosses halfway from its floor to its peak, relative to the beat. */
