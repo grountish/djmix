@@ -6,6 +6,8 @@ export type MeterTarget = DeckId | 'master';
 
 let graph: MixGraph | null = null;
 let meters: Partial<Record<MeterTarget, AnalyserNode>> = {};
+/** Resolves once the limiter sits behind the master fader (it rewires the master's outputs). */
+let limiterAttached: Promise<void> = Promise.resolve();
 
 /** The app's single mix graph, bound to the shared AudioContext. */
 export function getMixGraph(): MixGraph {
@@ -13,7 +15,7 @@ export function getMixGraph(): MixGraph {
   if (!graph || graph.ctx !== ctx) {
     graph = createMixGraph(ctx);
     meters = {};
-    attachLimiter(graph).catch((error) => console.error('Master limiter unavailable:', error));
+    limiterAttached = attachLimiter(graph).catch((error) => console.error('Master limiter unavailable:', error));
   }
   return graph;
 }
@@ -23,11 +25,16 @@ export function getMeter(target: MeterTarget): AnalyserNode {
   const mix = getMixGraph();
   let meter = meters[target];
   if (!meter) {
-    meter = mix.ctx.createAnalyser();
-    meter.fftSize = 1024;
-    meter.smoothingTimeConstant = 0;
-    (target === 'master' ? mix.master : mix.decks[target].fader).connect(meter);
-    meters[target] = meter;
+    const analyser = mix.ctx.createAnalyser();
+    analyser.fftSize = 1024;
+    analyser.smoothingTimeConstant = 0;
+    if (target === 'master') {
+      // Attaching the limiter disconnects everything from the master, so tap it afterwards.
+      limiterAttached.then(() => mix.master.connect(analyser));
+    } else {
+      mix.decks[target].fader.connect(analyser);
+    }
+    meter = meters[target] = analyser;
   }
   return meter;
 }
