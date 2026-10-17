@@ -20,9 +20,13 @@ export const KILL = -Infinity;
 const BASS_SWAP_BARS = 1 / 8;
 /** Filter knob position the outgoing track is swept to (high-pass around 500 Hz). */
 const OUTRO_HIGHPASS = 0.55;
+/** The incoming fader rises over this many bars at most (48 s at 120 BPM). */
+const MAX_FADE_IN_BARS = 24;
+/** …and is at full level this many bars before the blend ends. */
+const FADE_IN_SETTLE_BARS = 4;
 
 /**
- * EQ blend around the bass swap. The incoming track fades in over the bars before the swap
+ * EQ blend around the bass swap. The incoming track fades in slowly over most of the blend
  * with its highs and mids eased in; the basslines swap in half a beat right before the swap
  * downbeat, so exactly one deck owns the low end at any time; then the outgoing mids and
  * highs give way and its remainder is filtered and faded out over most of what is left.
@@ -31,7 +35,7 @@ export function blendTemplate(overlapBars: number, bassSwapBar: number): Lane[] 
   const length = overlapBars;
   const swap = bassSwapBar;
   const after = length - swap;
-  const fadeIn = Math.min(length / 4, swap);
+  const fadeIn = Math.max(1, Math.min(MAX_FADE_IN_BARS, length - FADE_IN_SETTLE_BARS));
   const incomingMid = [
     { bar: 0, value: -9 },
     { bar: swap / 2, value: -9 },
