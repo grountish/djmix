@@ -1,4 +1,6 @@
-import { eqKnobToGain, crossfaderGains, filterKnobToCutoffs } from './curves';
+import { crossfaderGainsFor, type CrossfaderSettings, DEFAULT_CROSSFADER } from './crossfaderCurve';
+import { eqKnobToGain, filterKnobToCutoffs } from './curves';
+import { type ChannelFx, createChannelFx } from './fx';
 
 export type DeckId = 'A' | 'B';
 
@@ -16,12 +18,15 @@ export interface DeckChannel {
   fader: GainNode;
   /** This deck's share of the crossfader. */
   crossfade: GainNode;
+  /** Post-fader effects, built on first use (see `getChannelFx`). */
+  fx: ChannelFx | null;
 }
 
 export interface MixGraph {
   ctx: BaseAudioContext;
   decks: Record<DeckId, DeckChannel>;
   master: GainNode;
+  crossfader: { settings: CrossfaderSettings; position: number };
 }
 
 export type EqBand = 'low' | 'mid' | 'high';
@@ -61,15 +66,23 @@ export function createMixGraph(
     const fader = ctx.createGain();
     const crossfade = ctx.createGain();
     connectChain(eqSum, lowpass, highpass, fader, crossfade, master);
-    return { input, eq, filter: { lowpass, highpass }, fader, crossfade };
+    return { input, eq, filter: { lowpass, highpass }, fader, crossfade, fx: null };
   };
 
   const decks = { A: createChannel(), B: createChannel() };
-  const centre = crossfaderGains(0);
+  const crossfader = { settings: { ...DEFAULT_CROSSFADER }, position: 0 };
+  const centre = crossfaderGainsFor(crossfader.settings, 0);
   decks.A.crossfade.gain.value = centre.a;
   decks.B.crossfade.gain.value = centre.b;
 
-  return { ctx, decks, master };
+  return { ctx, decks, master, crossfader };
+}
+
+/** The channel's effects, inserted between its fader and the crossfader on first use. */
+export function getChannelFx(graph: MixGraph, deck: DeckId): ChannelFx {
+  const channel = graph.decks[deck];
+  if (!channel.fx) channel.fx = createChannelFx(graph.ctx, channel.fader, channel.crossfade);
+  return channel.fx;
 }
 
 function biquad(
@@ -127,9 +140,16 @@ export function setParamSmooth(param: AudioParam, value: number, ctx: BaseAudioC
 }
 
 export function setCrossfaderPosition(graph: MixGraph, position: number): void {
-  const { a, b } = crossfaderGains(position);
+  graph.crossfader.position = position;
+  const { a, b } = crossfaderGainsFor(graph.crossfader.settings, position);
   setParamSmooth(graph.decks.A.crossfade.gain, a, graph.ctx);
   setParamSmooth(graph.decks.B.crossfade.gain, b, graph.ctx);
+}
+
+/** Changes the crossfader law and re-applies the current position on it. */
+export function setCrossfaderCurve(graph: MixGraph, settings: CrossfaderSettings): void {
+  graph.crossfader.settings = { ...settings };
+  setCrossfaderPosition(graph, graph.crossfader.position);
 }
 
 /**
@@ -147,10 +167,11 @@ export function scheduleCrossfade(
   const curveB = new Float32Array(CROSSFADE_CURVE_POINTS);
   for (let i = 0; i < CROSSFADE_CURVE_POINTS; i++) {
     const position = from + ((to - from) * i) / (CROSSFADE_CURVE_POINTS - 1);
-    const { a, b } = crossfaderGains(position);
+    const { a, b } = crossfaderGainsFor(graph.crossfader.settings, position);
     curveA[i] = a;
     curveB[i] = b;
   }
+  graph.crossfader.position = to;
 
   const now = graph.ctx.currentTime;
   const start = Math.max(startTime, now);

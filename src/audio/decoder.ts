@@ -1,8 +1,23 @@
+import { loadAudioSettings } from './audioSettings';
+import { applyOutputDevice } from './engine/outputDevice';
+
 let audioContext: AudioContext | null = null;
 
+/**
+ * The app's one AudioContext, opened with the saved audio settings: the sample rate and
+ * latency hint are fixed for its lifetime (a change needs a restart), the output device can
+ * change while it runs.
+ */
 export function getAudioContext(): AudioContext {
   if (!audioContext || audioContext.state === 'closed') {
-    audioContext = new AudioContext();
+    const settings = loadAudioSettings();
+    audioContext = new AudioContext({
+      latencyHint: settings.latencyHint,
+      ...(settings.sampleRate ? { sampleRate: settings.sampleRate } : {}),
+    });
+    void applyOutputDevice(audioContext, settings.outputDeviceId).catch((error) =>
+      console.error('Audio output device unavailable, using the default:', error),
+    );
   }
   return audioContext;
 }

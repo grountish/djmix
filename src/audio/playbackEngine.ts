@@ -1,13 +1,26 @@
 import type { PlaybackMode } from '@/types';
+import type { BeatClock } from './analysis/beatClock';
+import type { Phrase } from './analysis/types';
 import { getAudioContext } from './decoder';
 import { DeckPlayer } from './engine/deckPlayer';
 import { getMixGraph } from './engine/liveGraph';
-import { createStretchNode } from './engine/stretch';
+import { LoopController } from './engine/loop';
+import { createStretchNode, STRETCH_LEAD } from './engine/stretch';
 import type { DeckId, MixGraph } from './engine/mixGraph';
-import type { PlayheadAnchor } from './engine/transport';
+import { nextUnitOnClock, phaseSyncTarget, type SyncMaster, type SyncMode, syncStartUnit } from './engine/sync';
+import { type PlayheadAnchor, SCHEDULE_LEAD, trackTimeAt } from './engine/transport';
+
+export type { LoopRegion } from './engine/loop';
+export { LOOP_SIZES_BEATS } from './engine/loop';
+export type { SyncMode } from './engine/sync';
+export { SYNC_MODES } from './engine/sync';
 
 interface DeckEngine {
   player: DeckPlayer;
+  loop: LoopController;
+  /** Beat grid of the loaded track (beat 0 = first downbeat), null when unknown. */
+  clock: BeatClock | null;
+  phrases?: Phrase[];
   onTimeUpdate?: (time: number) => void;
   onEnded?: () => void;
   animationFrameId?: number;
@@ -26,9 +39,8 @@ function getDeck(deckId: DeckId): DeckEngine {
 }
 
 function createDeckEngine(graph: MixGraph, id: DeckId): DeckEngine {
-  const deck: DeckEngine = {
-    player: new DeckPlayer(graph.ctx, graph.decks[id].input, createStretchNode),
-  };
+  const player = new DeckPlayer(graph.ctx, graph.decks[id].input, createStretchNode);
+  const deck: DeckEngine = { player, loop: new LoopController(player, graph.ctx), clock: null };
   deck.player.onEnded = () => {
     stopTimeTracking(deck);
     deck.onEnded?.();
@@ -38,7 +50,75 @@ function createDeckEngine(graph: MixGraph, id: DeckId): DeckEngine {
 
 export async function loadAudioBufferToDeck(deckId: DeckId, audioBuffer: AudioBuffer): Promise<void> {
   stopDeck(deckId);
-  await getDeck(deckId).player.load(audioBuffer);
+  const deck = getDeck(deckId);
+  deck.loop.clear();
+  await deck.player.load(audioBuffer);
+}
+
+/** The loaded track's grid and phrases: loops snap to it and sync aligns by it. Clears any loop. */
+export function setDeckGrid(deckId: DeckId, clock: BeatClock | null, phrases?: Phrase[]): void {
+  const deck = getDeck(deckId);
+  deck.clock = clock;
+  deck.phrases = phrases;
+  deck.loop.setClock(clock);
+}
+
+/** The deck's loop controls (auto-loop, in/out, halve/double, exit/reloop). */
+export function getDeckLoop(deckId: DeckId): LoopController {
+  return getDeck(deckId).loop;
+}
+
+/** Lead a change on the deck's current path needs to land exactly. */
+function changeLead(player: DeckPlayer): number {
+  return (player.isKeyLocked ? STRETCH_LEAD : SCHEDULE_LEAD) + 0.005;
+}
+
+function syncMaster(masterId: DeckId): SyncMaster | null {
+  const master = getDeck(masterId);
+  const anchor = master.player.getAnchor();
+  if (!master.clock || !anchor) return null;
+  return { clock: master.clock, anchor, phrases: master.phrases };
+}
+
+/**
+ * Syncs a deck to the playing master: `rate` (the tempo match) and, beyond 'tempo' mode, a
+ * jump onto the master's phase. A stopped deck only takes the rate (see `playDeckInSync`).
+ * Returns false when the master isn't playing or a grid is missing.
+ */
+export function syncDeckPhase(deckId: DeckId, masterId: DeckId, mode: SyncMode, rate: number): boolean {
+  const deck = getDeck(deckId);
+  if (!deck.player.isPlaying || mode === 'tempo') {
+    deck.player.setRate(rate);
+    return true;
+  }
+  const master = syncMaster(masterId);
+  if (!master || !deck.clock) {
+    deck.player.setRate(rate);
+    return false;
+  }
+  const at = getMixGraph().ctx.currentTime + changeLead(deck.player);
+  const position = trackTimeAt(deck.player.getAnchor()!, at);
+  const target = phaseSyncTarget(mode, master, { clock: deck.clock, trackTime: position, phrases: deck.phrases }, at);
+  deck.player.scheduleJump(at, target, rate);
+  return true;
+}
+
+/**
+ * Starts a stopped deck in phase with the playing master: on the master's next beat (beat
+ * mode) or bar line, from the position nearest the playhead that lines up. Falls back to a
+ * plain start when the master isn't playing or a grid is missing.
+ */
+export function playDeckInSync(deckId: DeckId, masterId: DeckId, mode: SyncMode, rate: number): boolean {
+  const deck = getDeck(deckId);
+  if (deck.player.isPlaying) return false;
+  deck.player.setRate(rate);
+  const master = mode === 'tempo' ? null : syncMaster(masterId);
+  if (!master || !deck.clock) return playDeck(deckId);
+  const now = getMixGraph().ctx.currentTime;
+  const start = nextUnitOnClock(master, syncStartUnit(mode), now, changeLead(deck.player));
+  const follower = { clock: deck.clock, trackTime: deck.player.currentTime(), phrases: deck.phrases };
+  deck.player.seek(Math.max(0, phaseSyncTarget(mode, master, follower, start.ctxTime)));
+  return playDeck(deckId, start.ctxTime);
 }
 
 /** Starts the deck at audio-clock time `when` (default: now). */

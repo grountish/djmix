@@ -4,3 +4,4 @@ export { Mixer } from './Mixer';
 export { Browser } from './Browser';
 export { Knob } from './Knob';
 export { Meter } from './Meter';
+export { Settings } from './Settings';

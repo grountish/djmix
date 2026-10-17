@@ -1,0 +1,104 @@
+/* Audio settings panel (see components/Settings.tsx). */
+.settings-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.6);
+}
+
+.settings {
+  width: 440px;
+  max-width: calc(100vw - 32px);
+  padding: 18px 20px 16px;
+  border: 1px solid var(--line-2);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+}
+
+.settings-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.settings-title {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-2);
+}
+
+.settings-close {
+  padding: 2px 8px;
+  border: 1px solid var(--line-2);
+  border-radius: 4px;
+  background: var(--panel-2);
+  color: var(--text-2);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.settings-close:hover {
+  color: var(--text);
+  border-color: var(--text-3);
+}
+
+.settings-row {
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.settings-label {
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+.settings-row select {
+  width: 100%;
+  padding: 5px 8px;
+  border: 1px solid var(--line-2);
+  border-radius: 4px;
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.settings-row select:disabled {
+  color: var(--text-3);
+}
+
+.settings-note {
+  margin: 4px 0 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-3);
+}
+
+.settings-note.restart {
+  color: var(--yellow);
+}
+
+.settings-error {
+  margin: 6px 0 0;
+  font-size: 11px;
+  color: var(--red);
+}
+
+.settings-info {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-2);
+}
