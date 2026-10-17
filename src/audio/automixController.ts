@@ -35,6 +35,36 @@ let active: {
   incomingId: DeckId;
 } | null = null;
 
+/** One transition that ran (or runs), for diagnosis after the fact. */
+export interface TransitionRecord {
+  plan: TransitionPlan;
+  outgoingId: DeckId;
+  incomingId: DeckId;
+  timing: MixTiming;
+  /** Audio-clock times: when it was started, when the incoming deck is/was heard, when it ended. */
+  startedAt: number;
+  incomingStart: number;
+  overlapEnd: number;
+  /** 'cancelled' when the user took over, 'finished' when it ran to the end; absent while running. */
+  outcome?: 'finished' | 'cancelled';
+  endedAt?: number;
+  lockAbandoned: boolean;
+}
+
+const HISTORY_LENGTH = 4;
+const history: TransitionRecord[] = [];
+const runnerClosers = new WeakMap<TransitionRunner, (outcome: 'finished' | 'cancelled') => void>();
+
+/** The last few transitions, newest first (the running one included). */
+export function recentTransitions(): TransitionRecord[] {
+  return [...history].reverse();
+}
+
+function remember(record: TransitionRecord): void {
+  history.push(record);
+  if (history.length > HISTORY_LENGTH) history.shift();
+}
+
 /**
  * The transition that would run now from the playing `outgoingId` deck into the other deck:
  * tempo meeting point, phrase-aligned mix points, key shift and EQ blend. Pass the analyses
@@ -118,6 +148,7 @@ export function startAutomixTransition(
       },
       onOutgoingStopped: callbacks.onOutgoingStopped,
       onFinished: () => {
+        runnerClosers.get(runner)?.('finished');
         stopTimer();
         callbacks.onFinished();
       },
@@ -128,6 +159,24 @@ export function startAutomixTransition(
     plan.warnings.push('Beat clocks disagree: not beat-locked');
     console.warn('[automix] beat lock abandoned: the two beat clocks disagree by more than 3%');
   }
+  const record: TransitionRecord = {
+    plan,
+    outgoingId,
+    incomingId,
+    timing,
+    startedAt: graph.ctx.currentTime,
+    incomingStart: runner.incomingStart,
+    overlapEnd: runner.overlapEnd,
+    lockAbandoned: runner.lockAbandoned,
+  };
+  remember(record);
+  const close = (outcome: 'finished' | 'cancelled') => {
+    if (!record.outcome) {
+      record.outcome = outcome;
+      record.endedAt = graph.ctx.currentTime;
+    }
+  };
+  runnerClosers.set(runner, close);
 
   const timer = setInterval(() => {
     const now = graph.ctx.currentTime;
@@ -155,6 +204,7 @@ export function cancelTransition(): { incomingId: DeckId; incomingStarted: boole
   if (!active) return null;
   const { runner, incomingId } = active;
   runner.cancel();
+  runnerClosers.get(runner)?.('cancelled');
   stopTimer();
   return { incomingId, incomingStarted: runner.incomingStarted(getMixGraph().ctx.currentTime) };
 }

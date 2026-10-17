@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useApp, type TrackPatch } from '@/store/AppContext';
 import { dedupeTracks } from '@/store/library';
 import { Browser, Deck, Mixer, Settings } from '@/components';
+import { BadMixButton } from '@/components/BadMixButton';
 import { NextMix } from '@/components/NextMix';
 import { SYNC_MODES } from '@/audio/engine/sync';
 import { loudnessTrimDb } from '@/audio/engine/curves';
@@ -396,6 +397,7 @@ export function App() {
           <span>Crossfader {Math.round(state.crossfader * 100)}</span>
           <span className="status-sep" />
           <span>Master {Math.round(state.masterVolume * 100)}%</span>
+          <BadMixButton />
         </span>
       </footer>
 

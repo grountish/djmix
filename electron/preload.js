@@ -13,4 +13,5 @@ contextBridge.exposeInMainWorld('electronAPI', {
   librarySave: (tracks) => ipcRenderer.invoke('library:save', tracks),
   libraryLoad: () => ipcRenderer.invoke('library:load'),
   libraryClear: () => ipcRenderer.invoke('library:clear'),
+  reportSave: (report) => ipcRenderer.invoke('report:save', report),
 });

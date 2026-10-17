@@ -821,8 +821,9 @@ export function summarizeTransition(
   const forecast = bands && input.forecast ? checkForecast(bands, input.forecast) : undefined;
 
   const checks: TransitionChecks = {
+    // p95, not the single worst beat: one misread kick in a hundred is the metric, not the mix.
     beatAlignment:
-      alignment.summary.count < MIN_ALIGNED_BEATS ? null : alignment.summary.maxAbsMs < targets.maxBeatErrorMs,
+      alignment.summary.count < MIN_ALIGNED_BEATS ? null : alignment.summary.p95AbsMs < targets.maxBeatErrorMs,
     phase: phase && Number.isFinite(phase.offsetMs) ? Math.abs(phase.offsetMs) < targets.maxBeatErrorMs : null,
     lowBand: unexpectedCollisionBeats.length === 0,
     // A planned blend walks from one track's level to the other's; with a forecast to judge

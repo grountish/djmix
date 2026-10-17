@@ -139,6 +139,14 @@ export interface ElectronAPI {
   librarySave: (tracks: Track[]) => Promise<boolean>;
   libraryLoad: () => Promise<Track[]>;
   libraryClear: () => Promise<boolean>;
+  /** Writes a diagnostic report (the "bad mix" button) to a folder under userData; its path, or null. */
+  reportSave: (report: DiagnosticReport) => Promise<string | null>;
+}
+
+/** Files of one diagnostic report, saved together in one folder. */
+export interface DiagnosticReport {
+  name: string;
+  files: { name: string; bytes?: Uint8Array; text?: string }[];
 }
 
 declare global {

@@ -227,3 +227,22 @@ ipcMain.handle('library:clear', async () => {
     return false;
   }
 });
+
+// Diagnostic reports (the "bad mix" button): a folder of files under userData/reports.
+ipcMain.handle('report:save', async (event, report) => {
+  try {
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const safeName = String(report.name || 'report').replace(/[^\w.-]+/g, '_').slice(0, 60);
+    const dir = path.join(app.getPath('userData'), 'reports', `${stamp}-${safeName}`);
+    fs.mkdirSync(dir, { recursive: true });
+    for (const file of report.files || []) {
+      const target = path.join(dir, path.basename(String(file.name)));
+      if (file.bytes) fs.writeFileSync(target, Buffer.from(file.bytes));
+      else fs.writeFileSync(target, String(file.text ?? ''));
+    }
+    return dir;
+  } catch (error) {
+    console.error('Report save error:', error);
+    return null;
+  }
+});

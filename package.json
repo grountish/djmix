@@ -16,7 +16,8 @@
     "test:watch": "vitest",
     "test:live": "playwright test",
     "analyze": "tsx scripts/analyze.ts",
-    "mixlab": "tsx scripts/mixlab.ts"
+    "mixlab": "tsx scripts/mixlab.ts",
+    "mixset": "tsx scripts/mixset.ts"
   },
   "keywords": [
     "dj",
