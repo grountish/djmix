@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useReducer, useCallback, useRef } from 'react';
+import React, { createContext, useContext, useReducer, useCallback, useEffect, useRef } from 'react';
 import type { AnalysisOverrides, Track, DeckState, EqBand, PlaybackMode, SortOption, FilterOptions } from '@/types';
 import { effectiveAnalysis } from '@/audio/analysis/overrides';
 import { mergeTracks } from './library';
@@ -33,8 +33,9 @@ import { orderSet, sequencerTrackFromAnalysis, type TempoDirection } from '@/aud
 import type { MixTiming } from '@/audio/mix/mixPoints';
 import { eqDbToGain } from '@/audio/mix/templates';
 import { eqGainToKnob } from '@/audio/engine/curves';
+import { installTestBridge } from '@/testBridge';
 
-interface AppState {
+export interface AppState {
   tracks: Track[];
   sortOption: SortOption;
   filterOptions: FilterOptions;
@@ -771,6 +772,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       dispatch({ type: 'MARK_PLAYED', trackId });
     }, []),
   };
+
+  // Development builds expose the store to the live tests (see e2e/).
+  useEffect(() => {
+    installTestBridge(() => stateRef.current, actions);
+  });
 
   return <AppContext.Provider value={{ state, actions }}>{children}</AppContext.Provider>;
 }

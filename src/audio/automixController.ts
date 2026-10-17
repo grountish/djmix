@@ -2,7 +2,7 @@ import type { AudioAnalysis } from './analysis/types';
 import { getMixGraph } from './engine/liveGraph';
 import type { DeckId } from './engine/mixGraph';
 import type { MixTiming } from './mix/mixPoints';
-import { planTransition, type TransitionPlan } from './mix/planner';
+import { planTransition, type PlanPolicy, type TransitionPlan } from './mix/planner';
 import { type LaneValues, TransitionRunner } from './mix/runner';
 import { trackClock } from './mix/trackClock';
 import { getDeckPlayer, trackDeckTime } from './playbackEngine';
@@ -22,6 +22,13 @@ export interface AutomixCallbacks {
 /** Dispatch tick; timers keep running while the window is hidden (Electron throttling off). */
 const DISPATCH_INTERVAL_MS = 30;
 
+let planPolicy: Partial<PlanPolicy> = {};
+
+/** Overrides for every plan made from now on (e.g. a shorter maximum blend); {} resets. */
+export function setPlanPolicy(policy: Partial<PlanPolicy>): void {
+  planPolicy = policy;
+}
+
 let active: {
   runner: TransitionRunner;
   timer: ReturnType<typeof setInterval>;
@@ -38,6 +45,7 @@ export function previewTransition(
   outgoing: AudioAnalysis,
   incoming: AudioAnalysis,
   timing: MixTiming = 'end',
+  startBar?: number,
 ): TransitionPlan | null {
   const player = getDeckPlayer(outgoingId);
   if (!player.isPlaying) return null;
@@ -50,6 +58,8 @@ export function previewTransition(
     },
     incoming: { analysis: incoming },
     timing,
+    startBar,
+    policy: planPolicy,
   });
 }
 
@@ -84,13 +94,14 @@ export function startAutomixTransition(
   incoming: AudioAnalysis,
   timing: MixTiming,
   callbacks: AutomixCallbacks,
+  startBar?: number,
 ): TransitionPlan | null {
   cancelTransition();
   const incomingId: DeckId = outgoingId === 'A' ? 'B' : 'A';
   const outgoingPlayer = getDeckPlayer(outgoingId);
   const incomingPlayer = getDeckPlayer(incomingId);
   if (!incomingPlayer.audioBuffer) return null;
-  const plan = previewTransition(outgoingId, outgoing, incoming, timing);
+  const plan = previewTransition(outgoingId, outgoing, incoming, timing, startBar);
   if (!plan) return null;
 
   const graph = getMixGraph();
@@ -153,9 +164,10 @@ export function describePlan(plan: TransitionPlan): string {
   const tempo = `${plan.tempo.meetBpm.toFixed(1)} BPM`;
   const keys = `${plan.harmonic.outgoingKey}→${plan.harmonic.incomingKey}`;
   const shift = plan.incomingSemitones ? ` (${plan.incomingSemitones > 0 ? '+' : ''}${plan.incomingSemitones} st)` : '';
+  const loop = plan.outgoingLoop ? `, looping bars ${plan.outgoingLoop.startBar + 1}–${plan.outgoingLoop.startBar + plan.outgoingLoop.bars}` : '';
   const what =
     plan.kind === 'blend'
-      ? `${plan.overlapBars}-bar blend at bar ${plan.outgoingStartBar + 1}, next track in from its bar ${plan.incomingStartBar + 1}, bass swap at bar ${plan.outgoingStartBar + plan.bassSwapBar + 1}`
+      ? `${plan.overlapBars}-bar blend at bar ${plan.outgoingStartBar + 1}, next track in from its bar ${plan.incomingStartBar + 1}, bass swap at bar ${plan.outgoingStartBar + plan.bassSwapBar + 1}${loop}`
       : `cut at bar ${plan.outgoingStartBar + 1} into bar ${plan.incomingStartBar + 1}`;
   const warnings = plan.warnings.length ? ` · ⚠ ${plan.warnings.join('; ')}` : '';
   return `${what} · ${tempo} · ${keys}${shift}${warnings}`;

@@ -22,5 +22,8 @@ export default defineConfig({
     port: 5173,
     // Agent worktrees live under .claude/; their edits must not reload the app.
     watch: { ignored: ['**/.claude/**'] },
+    // The live tests (npm run test:live) start their own server: an edit made while a test
+    // plays its minutes of audio must not reload the page under it.
+    hmr: process.env.DJMIX_LIVE_TEST ? false : undefined,
   },
 });

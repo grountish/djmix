@@ -10,3 +10,7 @@ mixlab-out/
 
 # RTK vitest JSON reports
 .vitest/
+
+# Playwright
+test-results/
+playwright-report/
