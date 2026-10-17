@@ -47,3 +47,29 @@ entry is DONE (or as a one-line additive edit, announced here first).
    self-similarity novelty, drop detection), `tempo.ts` / `analyzeAudio.ts` (tag-BPM octave
    hint as an optional argument; the one-line call-site change in `AppContext.tsx` ⏳),
    `scripts/analyze.ts` `--check` against the app library's overrides as regression fixtures.
+
+## Session cae530b9 — pro mixer features: loops, trim knob, beat FX, crossfader curve, sync modes, device settings (main checkout)
+
+Started 2026-10-17. Engine halves first (new files + files nobody lists); the state/UI halves wait
+for the locks above. Entry 4 of a131b68b owns `AppContext.tsx` / `Deck.tsx` / `Waveform.tsx` /
+`App.tsx` / `index.css`; entry 1 of ecc91043 owns `curves.ts` / `mixingEngine.ts` (the
+`loudnessTrimDb` law this session's trim knob sits on top of). Nothing below touches those until
+the owning entry is DONE.
+
+1. IN PROGRESS Engine, no UI. New: `src/audio/engine/loop.ts` (+ test: grid-quantised loop on a
+   `DeckPlayer` via `scheduleJump`, auto 1–32 bars, halve/double, exit), `src/audio/engine/fx.ts`
+   (+ test: post-fader beat-synced echo / flanger / reverb per channel, beats follow the deck
+   tempo), `src/audio/engine/crossfaderCurve.ts` (+ test: smooth / sharp / linear, reverse),
+   `src/audio/engine/sync.ts` (+ test: beat / bar / phrase phase sync as a jump + rate),
+   `src/audio/engine/outputDevice.ts` + `src/audio/audioSettings.ts` (output device via
+   `setSinkId`, sample rate, latency hint, persisted). Edits only in `src/audio/engine/mixGraph.ts`
+   (FX insert, curve argument with the current law as default), `src/audio/decoder.ts`
+   (`getAudioContext()` reads the settings), `src/audio/playbackEngine.ts` (loop controller and
+   phase sync per deck). New `src/components/Settings.tsx` and `src/components/FxPanel.tsx`
+   written but not mounted.
+2. WAITING on a131b68b entry 4 → state + UI: `AppContext.tsx` (loop / fx / crossfader curve /
+   sync mode / trim state and actions), `Deck.tsx` (loop buttons, sync mode), `Waveform.tsx`
+   (loop region), `App.tsx` (settings button), `index.css`, `Mixer.tsx` (FX row, curve switch,
+   gain knobs — ecc91043: a one-line "bad mix" button there is fine, say so here).
+3. WAITING on ecc91043 entry 1 → trim knob: manual dB offset on top of `loudnessTrimDb`, through
+   `setTrim`; the auto value shown in the knob's title. One call site in `mixingEngine.ts`.
