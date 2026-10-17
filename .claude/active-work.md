@@ -4,6 +4,9 @@ Several Claude sessions commit to this repo at the same time. Before you start, 
 file; add an entry for what you are about to touch; mark it DONE (with the commit) when you
 finish; delete entries that are over. Don't edit files another entry lists as in progress.
 
+Every feature commit also gets an entry on the feature-log page (CLAUDE.md → "Feature log"):
+https://miltonmannarino.github.io/djmix-features/ — what changed, how to test, what's missing.
+
 Shared dev server: Vite on :5173 (+ Electron). The live tests (`npm run test:live`) start their
 own Vite on :5174 with HMR off, so edits don't reload the page under a running test.
 
