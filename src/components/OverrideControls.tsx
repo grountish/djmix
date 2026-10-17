@@ -80,6 +80,12 @@ export function OverrideControls({ analysis, overrides, onChange }: OverrideCont
           title={`Move the grid ${NUDGE_MS} ms later (Shift: ${FINE_NUDGE_MS} ms)`}>
           ▶
         </button>
+        <button
+          className="mode-button fix-button"
+          onClick={() => edit({ type: 'nudge', ms: 30000 / (analysis.bpm * fixes.tempoMultiplier) })}
+          title="Move the grid half a beat: use when the beat lines sit between the kicks (on the bass hits)">
+          ½
+        </button>
       </div>
 
       <div className="fix-group">
