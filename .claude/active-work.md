@@ -7,20 +7,17 @@ finish; delete entries that are over. Don't edit files another entry lists as in
 Shared dev server: Vite on :5173 (+ Electron). The live tests (`npm run test:live`) start their
 own Vite on :5174 with HMR off, so edits don't reload the page under a running test.
 
-## Session a131b68b — "10 improvements" batch (main checkout, commits straight to main)
+## Session a131b68b — "10 improvements" batch — FINISHED 2026-10-18, nothing in progress
 
-Started 2026-10-17. Order: 1 → 5 → 8 → 6.
-
+All four items are on main; every file below is free.
 1. DONE `9e3aa19` Waveform cache, no decoding at startup.
 2. DONE `f2f0fe4` Live automix regression test (`npm run test:live`, Playwright, ~2.5 min, own Vite on :5174).
 3. DONE `ec3e768` + `0b101a9` Outro looping (`outgoingLoop` in plans, runner 'jump' commands,
-   `DeckPlayer.scheduleJump`) and a chosen start bar for the planner. `planner.ts` / `mixPoints.ts` /
-   `runner.ts` / `deckPlayer.ts` are free again.
-4. IN PROGRESS Transition inspector: the upcoming mix drawn on both deck waveforms (entry, swap,
-   loop), earlier/later/skip controls in the top bar. Touching ONLY:
-   `src/store/AppContext.tsx` (automix.next / startBar state + actions, triggerAutomix),
-   `src/store/useAutoDj.ts`, `src/App.tsx`, `src/components/Deck.tsx`, `src/components/Waveform.tsx`,
-   new `src/components/NextMix.tsx`, `src/styles/index.css`.
+   `DeckPlayer.scheduleJump`) and a chosen start bar for the planner.
+4. DONE (see git log, `feat(ui): the next mix drawn on both decks`) Transition inspector:
+   `automix.next` in the store, marks on both waveforms, NextMix strip in the top bar.
+Notes for whoever edits these next: the tests in `balance.test.ts` (session ecc91043) were failing
+on main's working tree at the time of writing; everything else passed (160/165).
 
 ## Session ecc91043 — mix quality: energy-aware EQ, independent metrics, structure (main checkout)
 
