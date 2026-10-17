@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useApp } from '@/store/AppContext';
+import { useApp, type TrackPatch } from '@/store/AppContext';
 import { dedupeTracks } from '@/store/library';
 import { Browser, Deck, Mixer } from '@/components';
 import { useAutoDj } from '@/store/useAutoDj';
@@ -17,8 +17,6 @@ import {
   createAnalysisFromCache,
   isCurrentAnalysis,
   isElectronEnvironment,
-  generateWaveformData,
-  generateSpectralWaveform,
 } from '@/audio';
 import type { Track, TrackAnalysis } from '@/types';
 import { keyFromTag } from '@/audio/analysis/key';
@@ -35,19 +33,21 @@ export function App() {
   const { state, actions } = useApp();
   useAutoDj();
 
+  // Returns a patch rather than the track: by the time the analysis is done, the copy it started
+  // from may be stale (a waveform attached, a correction made).
   const analyzeTrack = useCallback(
-    async (track: Track & { _audioBuffer?: AudioBuffer }): Promise<Track> => {
+    async (track: Track & { _audioBuffer?: AudioBuffer }): Promise<TrackPatch> => {
       if (isElectronEnvironment()) {
         const cached = await getCachedAnalysis(track);
         if (cached) {
           const fingerprint = createFileFingerprint(track);
           const cacheKey = fingerprintToKey(fingerprint);
           const analysis = withTaggedKey(createAnalysisFromCache(cached, cacheKey), track);
-          return { ...track, analysis, analysisStatus: 'complete' };
+          return { id: track.id, analysis, analysisStatus: 'complete' };
         }
       }
 
-      actions.updateTrack({ ...track, analysisStatus: 'analyzing' });
+      actions.updateTrack({ id: track.id, analysisStatus: 'analyzing' });
 
       try {
         const audioBuffer = track._audioBuffer || (await decodeAudioFile(track.filePath));
@@ -56,10 +56,10 @@ export function App() {
         const cacheKey = fingerprintToKey(fingerprint);
         const analysis = withTaggedKey({ ...result, analyzedAt: new Date().toISOString(), cacheKey }, track);
         if (isElectronEnvironment()) await setCachedAnalysis(track, analysis);
-        return { ...track, analysis, analysisStatus: 'complete' };
+        return { id: track.id, analysis, analysisStatus: 'complete' };
       } catch (error) {
         console.error('Analysis failed:', error);
-        return { ...track, analysisStatus: 'error' };
+        return { id: track.id, analysisStatus: 'error' };
       }
     },
     [actions],
@@ -142,27 +142,20 @@ export function App() {
         }
 
         if (isElectronEnvironment()) {
-          const loadedTracks: Track[] = [];
-          // Regenerate waveform data for each track
-          for (const track of savedTracks) {
-            try {
-              const audioBuffer = await decodeAudioFile(track.filePath);
-              const current = isCurrentAnalysis(track.analysis);
-              loadedTracks.push({
-                ...track,
-                waveformData: generateWaveformData(audioBuffer),
-                spectralWaveform: generateSpectralWaveform(audioBuffer),
-                analysis: current ? track.analysis : null,
-                analysisStatus: current ? 'complete' : 'pending',
-              });
-            } catch (error) {
-              console.error(`Failed to load track ${track.fileName}:`, error);
-            }
-          }
-          if (loadedTracks.length > 0) {
-            tracksCountAfterLoadRef.current = loadedTracks.length;
-            actions.addTracks(loadedTracks);
-          }
+          // Nothing is decoded here: a deck fetches its waveform from the cache (or builds it
+          // from the audio it decodes anyway) when the track is loaded.
+          const loadedTracks = savedTracks.map((track): Track => {
+            const current = isCurrentAnalysis(track.analysis);
+            return {
+              ...track,
+              waveformData: undefined,
+              spectralWaveform: undefined,
+              analysis: current ? track.analysis : null,
+              analysisStatus: current ? 'complete' : 'pending',
+            };
+          });
+          tracksCountAfterLoadRef.current = loadedTracks.length;
+          actions.addTracks(loadedTracks);
         } else {
           // Browser mode: tracks already have waveform data stored (or need re-importing)
           const validTracks = savedTracks

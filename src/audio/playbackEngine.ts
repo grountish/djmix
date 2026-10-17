@@ -1,5 +1,5 @@
 import type { PlaybackMode } from '@/types';
-import { getAudioContext, decodeAudioFile } from './decoder';
+import { getAudioContext } from './decoder';
 import { DeckPlayer } from './engine/deckPlayer';
 import { getMixGraph } from './engine/liveGraph';
 import { createStretchNode } from './engine/stretch';
@@ -34,11 +34,6 @@ function createDeckEngine(graph: MixGraph, id: DeckId): DeckEngine {
     deck.onEnded?.();
   };
   return deck;
-}
-
-export async function loadTrackToDeck(deckId: DeckId, filePath: string): Promise<void> {
-  stopDeck(deckId);
-  await getDeck(deckId).player.load(await decodeAudioFile(filePath));
 }
 
 export async function loadAudioBufferToDeck(deckId: DeckId, audioBuffer: AudioBuffer): Promise<void> {

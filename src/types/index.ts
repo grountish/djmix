@@ -108,6 +108,9 @@ export interface ElectronAPI {
   cacheRead: (key: string) => Promise<CachedAnalysis | null>;
   cacheWrite: (key: string, value: CachedAnalysis) => Promise<boolean>;
   cacheReadAll: () => Promise<Record<string, CachedAnalysis>>;
+  /** Cached waveform bytes for a fingerprint key (see `waveformCache.ts`), null when absent. */
+  waveformRead: (key: string) => Promise<Uint8Array | null>;
+  waveformWrite: (key: string, bytes: Uint8Array) => Promise<boolean>;
   getAudioMetadata: (filePath: string) => Promise<{
     artwork?: string;
     artist?: string;

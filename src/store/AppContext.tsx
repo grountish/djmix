@@ -2,8 +2,10 @@ import React, { createContext, useContext, useReducer, useCallback, useRef } fro
 import type { AnalysisOverrides, Track, DeckState, EqBand, PlaybackMode, SortOption, FilterOptions } from '@/types';
 import { effectiveAnalysis } from '@/audio/analysis/overrides';
 import { mergeTracks } from './library';
+
+/** Fields to merge into one track. */
+export type TrackPatch = Pick<Track, 'id'> & Partial<Track>;
 import {
-  loadTrackToDeck,
   loadAudioBufferToDeck,
   playDeck,
   seekDeck,
@@ -16,6 +18,8 @@ import {
   forceStopDeck,
 } from '@/audio/playbackEngine';
 import { isElectronEnvironment } from '@/audio/fileImporter';
+import { decodeAudioFile } from '@/audio/decoder';
+import { ensureWaveform, type WaveformOverview } from '@/audio/waveformCache';
 import {
   setChannelFader,
   setCrossfader,
@@ -56,7 +60,8 @@ interface AppState {
 
 type Action =
   | { type: 'ADD_TRACKS'; tracks: Track[] }
-  | { type: 'UPDATE_TRACK'; track: Track }
+  | { type: 'UPDATE_TRACK'; patch: TrackPatch }
+  | { type: 'SET_TRACK_WAVEFORM'; trackId: string; waveform: WaveformOverview }
   | { type: 'SET_TRACK_OVERRIDES'; trackId: string; overrides: AnalysisOverrides | undefined }
   | { type: 'REMOVE_TRACK'; trackId: string }
   | { type: 'SET_SORT'; sortOption: SortOption }
@@ -124,11 +129,26 @@ function reducer(state: AppState, action: Action): AppState {
       return { ...state, tracks: mergeTracks(state.tracks, action.tracks) };
 
     case 'UPDATE_TRACK': {
-      // Decks hold their own copy of the track: an analysis finishing after the load reaches them too.
-      const deck = (d: DeckState): DeckState => (d.track?.id === action.track.id ? { ...d, track: action.track } : d);
+      // A patch, not a replacement: the analysis that sends it started from an older copy of the
+      // track, and must not undo a waveform or a correction attached in the meantime. Decks hold
+      // their own copy of the track, so it reaches them too.
+      const patched = (t: Track): Track => (t.id === action.patch.id ? { ...t, ...action.patch } : t);
+      const deck = (d: DeckState): DeckState => (d.track ? { ...d, track: patched(d.track) } : d);
       return {
         ...state,
-        tracks: state.tracks.map((t) => (t.id === action.track.id ? action.track : t)),
+        tracks: state.tracks.map(patched),
+        deckA: deck(state.deckA),
+        deckB: deck(state.deckB),
+      };
+    }
+
+    case 'SET_TRACK_WAVEFORM': {
+      // The overview is loaded lazily; attach it to the list entry and to any deck copy.
+      const withWaveform = (t: Track): Track => (t.id === action.trackId ? { ...t, ...action.waveform } : t);
+      const deck = (d: DeckState): DeckState => (d.track ? { ...d, track: withWaveform(d.track) } : d);
+      return {
+        ...state,
+        tracks: state.tracks.map(withWaveform),
         deckA: deck(state.deckA),
         deckB: deck(state.deckB),
       };
@@ -312,7 +332,8 @@ interface AppContextValue {
   state: AppState;
   actions: {
     addTracks: (tracks: Track[]) => void;
-    updateTrack: (track: Track) => void;
+    /** Merges the given fields into the track (by `id`) in the library and on the decks. */
+    updateTrack: (patch: TrackPatch) => void;
     /** Stores the user's analysis corrections on the library track and any deck copy of it. */
     setTrackOverrides: (trackId: string, overrides: AnalysisOverrides | undefined) => void;
     removeTrack: (trackId: string) => void;
@@ -410,8 +431,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       dispatch({ type: 'ADD_TRACKS', tracks });
     }, []),
 
-    updateTrack: useCallback((track: Track) => {
-      dispatch({ type: 'UPDATE_TRACK', track });
+    updateTrack: useCallback((patch: TrackPatch) => {
+      dispatch({ type: 'UPDATE_TRACK', patch });
     }, []),
 
     setTrackOverrides: useCallback((trackId: string, overrides: AnalysisOverrides | undefined) => {
@@ -433,17 +454,25 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     loadToDeck: useCallback(
       async (deck: 'A' | 'B', track: Track & { _audioBuffer?: AudioBuffer }) => {
         releaseAutomix(`deck ${deck} loaded`);
+        let audioBuffer: AudioBuffer | null = null;
         if (isElectronEnvironment()) {
-          await loadTrackToDeck(deck, track.filePath);
+          audioBuffer = await decodeAudioFile(track.filePath);
+          await loadAudioBufferToDeck(deck, audioBuffer);
         } else if (track._audioBuffer) {
-          await loadAudioBufferToDeck(deck, track._audioBuffer);
+          audioBuffer = track._audioBuffer;
+          await loadAudioBufferToDeck(deck, audioBuffer);
         }
+        // The waveform comes from the cache, else from the audio just decoded.
+        const decoded = audioBuffer;
+        const waveform = await ensureWaveform(track, async () => decoded ?? decodeAudioFile(track.filePath));
+        const loaded: Track = waveform ? { ...track, ...waveform } : track;
 
         // Reset playback rate to 1 when loading a new track
         setDeckPlaybackRate(deck, 1);
         setDeckAutoGain(deck, track.analysis?.loudness.integratedLufs);
         dispatch({ type: 'SET_DECK_PLAYBACK_RATE', deck, rate: 1 });
-        dispatch({ type: 'SET_DECK_TRACK', deck, track });
+        dispatch({ type: 'SET_DECK_TRACK', deck, track: loaded });
+        if (waveform && !track.waveformData) dispatch({ type: 'SET_TRACK_WAVEFORM', trackId: track.id, waveform });
 
         setDeckTimeUpdateCallback(deck, (time) => {
           dispatch({ type: 'SET_DECK_TIME', deck, currentTime: time });

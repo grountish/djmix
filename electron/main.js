@@ -1,6 +1,7 @@
 const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 
 const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
 
@@ -118,6 +119,35 @@ ipcMain.handle('cache:readAll', async () => {
     console.error('Cache read error:', error);
   }
   return {};
+});
+
+// Waveform cache: one binary file per track, named by the hash of its fingerprint key.
+function waveformPath(key) {
+  const dir = path.join(app.getPath('userData'), 'waveforms');
+  const name = crypto.createHash('sha1').update(String(key)).digest('hex');
+  return { dir, file: path.join(dir, `${name}.bin`) };
+}
+
+ipcMain.handle('waveform:read', async (event, key) => {
+  try {
+    const { file } = waveformPath(key);
+    if (fs.existsSync(file)) return fs.readFileSync(file);
+  } catch (error) {
+    console.error('Waveform read error:', error);
+  }
+  return null;
+});
+
+ipcMain.handle('waveform:write', async (event, key, bytes) => {
+  try {
+    const { dir, file } = waveformPath(key);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(file, Buffer.from(bytes));
+    return true;
+  } catch (error) {
+    console.error('Waveform write error:', error);
+    return false;
+  }
 });
 
 ipcMain.handle('audio:getMetadata', async (event, filePath) => {

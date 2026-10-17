@@ -6,6 +6,7 @@ import {
   decodeAudioFromFile,
   generateSpectralWaveform,
 } from './decoder';
+import { writeCachedWaveform } from './waveformCache';
 
 const isElectron = typeof window !== 'undefined' && window.electronAPI !== undefined;
 
@@ -64,7 +65,7 @@ export async function createTrackFromFile(filePath: string): Promise<Track> {
     // Ignore metadata errors
   }
 
-  return {
+  const track: Track = {
     id: uuidv4(),
     filePath,
     fileName: extractFileName(filePath),
@@ -76,6 +77,9 @@ export async function createTrackFromFile(filePath: string): Promise<Track> {
     spectralWaveform,
     ...metadata,
   };
+  // The next launch draws the waveform from this cache instead of decoding the file again.
+  void writeCachedWaveform(track, spectralWaveform);
+  return track;
 }
 
 export async function createTrackFromBrowserFile(file: File): Promise<Track> {
