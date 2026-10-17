@@ -52,18 +52,23 @@ export function useAutoDj(): void {
   latest.current = { state, actions };
   const armedFor = useRef<string | null>(null);
   const busy = useRef(false);
+  const wasEnabled = useRef(false);
 
   // Start the set and keep the next track cued.
   useEffect(() => {
+    const justEnabled = state.automix.enabled && !wasEnabled.current;
+    wasEnabled.current = state.automix.enabled;
     if (!state.automix.enabled || state.automix.isTransitioning || busy.current) return;
     const played = new Set(state.played);
     const bothIdle = !state.deckA.playback.isPlaying && !state.deckB.playback.isPlaying;
     if (bothIdle) {
+      // Only when Auto has just been switched on: a deck the user stops stays stopped.
+      if (!justEnabled) return;
       const ready = (['A', 'B'] as const).find((id) => {
         const track = (id === 'A' ? state.deckA : state.deckB).track;
         return track && !played.has(track.id) && track.analysis;
       });
-      if (ready) actions.playPauseDeck(ready);
+      if (ready) actions.startDeck(ready);
       return;
     }
 

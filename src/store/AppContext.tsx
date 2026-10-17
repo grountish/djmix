@@ -320,6 +320,8 @@ interface AppContextValue {
     setFilter: (filterOptions: FilterOptions) => void;
     loadToDeck: (deck: 'A' | 'B', track: Track) => Promise<void>;
     playPauseDeck: (deck: 'A' | 'B') => void;
+    /** Starts a stopped deck without touching Auto (Auto itself uses this to start the set). */
+    startDeck: (deck: 'A' | 'B') => void;
     /** CUE: playing → back to the cue point and pause; paused → set the cue point here. */
     pressCue: (deck: 'A' | 'B') => void;
     /** Parks a deck on a cue point (Auto cueing the next track); doesn't take over from automix. */
@@ -354,7 +356,7 @@ interface AppContextValue {
 const AppContext = createContext<AppContextValue | null>(null);
 
 /** Smallest change worth re-rendering for while automix moves a control. */
-const LIVE_CONTROL_STEP = 0.01;
+const LIVE_CONTROL_STEP = 0.002;
 const LIVE_RATE_STEP = 1e-4;
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
@@ -394,6 +396,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     dispatch({ type: 'SET_AUTOMIX_TRANSITIONING', isTransitioning: false });
     dispatch({ type: 'SET_AUTOMIX_ENABLED', enabled: false });
     dispatch({ type: 'SET_AUTOMIX_STATUS', status: `Automix stopped: ${reason}` });
+  }, []);
+
+  /** Turns Auto off when the user stops a deck by hand, so it doesn't start one again. */
+  const autoOff = useCallback((reason: string) => {
+    if (!stateRef.current.automix.enabled) return;
+    dispatch({ type: 'SET_AUTOMIX_ENABLED', enabled: false });
+    dispatch({ type: 'SET_AUTOMIX_STATUS', status: `Auto off: ${reason}` });
   }, []);
 
   const actions: AppContextValue['actions'] = {
@@ -451,18 +460,25 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       releaseAutomix(`deck ${deck} play/pause`);
       // Check ACTUAL engine state, not just React state
       if (isDeckEnginePlaying(deck)) {
+        // A hand on the transport takes the set back: Auto would otherwise restart the deck.
+        autoOff(`deck ${deck} paused`);
         forceStopDeck(deck);
         dispatch({ type: 'SET_DECK_PLAYING', deck, isPlaying: false });
       } else if (playDeck(deck)) {
         dispatch({ type: 'SET_DECK_PLAYING', deck, isPlaying: true });
       }
-    }, [releaseAutomix]),
+    }, [releaseAutomix, autoOff]),
+
+    startDeck: useCallback((deck: 'A' | 'B') => {
+      if (!isDeckEnginePlaying(deck) && playDeck(deck)) dispatch({ type: 'SET_DECK_PLAYING', deck, isPlaying: true });
+    }, []),
 
     pressCue: useCallback((deck: 'A' | 'B') => {
       const deckState = deck === 'A' ? stateRef.current.deckA : stateRef.current.deckB;
       if (!deckState.track) return;
       if (isDeckEnginePlaying(deck)) {
         releaseAutomix(`deck ${deck} cued`);
+        autoOff(`deck ${deck} cued`);
         forceStopDeck(deck);
         dispatch({ type: 'SET_DECK_PLAYING', deck, isPlaying: false });
         const cue = deckState.cuePoint ?? 0;
@@ -471,7 +487,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       } else {
         dispatch({ type: 'SET_DECK_CUE', deck, cuePoint: deckState.playback.currentTime });
       }
-    }, [releaseAutomix]),
+    }, [releaseAutomix, autoOff]),
 
     cueDeckAt: useCallback((deck: 'A' | 'B', time: number) => {
       if (isDeckEnginePlaying(deck)) return;
