@@ -98,6 +98,27 @@ describe('chooseMixPoints', () => {
     expect(points.incomingStartBar + points.bassSwapBar).toBe(21);
   });
 
+  it('plays a one-bar pickup before the first phrase line instead of skipping it', () => {
+    // One bar of intro, then phrases every 8 bars from bar 1: the phrase lines must still
+    // coincide, so both tracks start a bar earlier and the pickup rides over the outgoing's
+    // last bar.
+    const incoming = phrases(['intro', 1, { kick: false, bass: false }], ['drop', 64], ['outro', 16]);
+    const points = chooseMixPoints({ ...input, incoming: { phrases: incoming, barCount: 81 } });
+    expect(points.incomingStartBar).toBe(0);
+    expect(points.overlapBars).toBe(33);
+    expect((points.outgoingStartBar + 1) % 8).toBe(0);
+    // The swap still falls on an outgoing phrase line (a quarter mark of the original overlap).
+    expect((points.outgoingStartBar + points.bassSwapBar) % 8).toBe(0);
+  });
+
+  it('keeps cues on the incoming phrase grid when the intro is longer than a pickup', () => {
+    // Five bars before the first phrase line: start on that line, not on bar 0.
+    const incoming = phrases(['intro', 5, { kick: false, bass: false }], ['drop', 64], ['outro', 16]);
+    const points = chooseMixPoints({ ...input, incoming: { phrases: incoming, barCount: 85 } });
+    expect(points.incomingStartBar).toBe(5);
+    expect(points.overlapBars).toBe(32);
+  });
+
   it('brings a track that starts at full energy in with an early swap, not a short blend', () => {
     const incoming = phrases(['drop', 120], ['outro', 8]);
     const points = chooseMixPoints({ ...input, incoming: { phrases: incoming, barCount: 128 } });

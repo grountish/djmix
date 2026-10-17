@@ -82,6 +82,8 @@ const EARLY_WEIGHT = 0.15;
 const LATE_WEIGHT = 1;
 /** Per bar the incoming drop comes after the swap: the energy should carry on, not wait. */
 const DROP_DELAY_WEIGHT = 0.05;
+/** Intro bars before the first phrase line that are played rather than skipped. */
+const MAX_PICKUP_BARS = 2;
 
 /**
  * Where to mix. Both tracks change on their phrase grids at the same moment. Every
@@ -104,8 +106,10 @@ export function chooseMixPoints(input: MixPointInput): MixPoints {
   const nowEntries = input.timing === 'now' ? entryBars(outgoing.phrases, outgoing.barCount, originOut) : [];
   const firstEntry = nowEntries.find((bar) => bar >= earliest);
 
+  // Cues sit on the incoming phrase grid, so its phrases land on the outgoing ones.
   const cues: number[] = [];
-  for (let bar = 0; bar <= drop; bar++) if (bar === 0 || onGrid(bar, originIn)) cues.push(bar);
+  for (let bar = 0; bar <= drop; bar++) if (onGrid(bar, originIn)) cues.push(bar);
+  if (cues.length === 0) cues.push(0);
 
   let best: (MixPoints & { score: number }) | null = null;
   for (const overlap of OVERLAP_CHOICES) {
@@ -145,11 +149,17 @@ export function chooseMixPoints(input: MixPointInput): MixPoints {
     }
   }
   if (best) {
+    // A short pickup before the incoming track's first phrase line (a bar or two of intro)
+    // comes along: both tracks start that much earlier, so the phrase lines still coincide.
+    const pickup =
+      best.incomingStartBar === originIn && originIn > 0 && originIn <= MAX_PICKUP_BARS && best.outgoingStartBar - originIn >= earliest
+        ? originIn
+        : 0;
     return {
-      overlapBars: best.overlapBars,
-      outgoingStartBar: best.outgoingStartBar,
-      incomingStartBar: best.incomingStartBar,
-      bassSwapBar: best.bassSwapBar,
+      overlapBars: best.overlapBars + pickup,
+      outgoingStartBar: best.outgoingStartBar - pickup,
+      incomingStartBar: best.incomingStartBar - pickup,
+      bassSwapBar: best.bassSwapBar + pickup,
     };
   }
 

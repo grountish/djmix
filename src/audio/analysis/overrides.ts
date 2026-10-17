@@ -19,6 +19,8 @@ export interface ResolvedOverrides {
   gridOffsetMs: number;
   downbeatShift: number;
   key: string | null;
+  /** Bars the phrase grid is moved later (wrapped to -4…3; a whole phrase is the same grid). */
+  phraseShift: number;
 }
 
 /** One click on the deck's correction controls. */
@@ -26,8 +28,11 @@ export type OverrideEdit =
   | { type: 'tempo'; factor: 0.5 | 2 }
   | { type: 'nudge'; ms: number }
   | { type: 'downbeat'; steps: number }
+  | { type: 'phrase'; bars: number }
   | { type: 'key'; camelot: string | null }
   | { type: 'reset' };
+
+const PHRASE_BARS = 8;
 
 /**
  * The analysis with the user's corrections applied, in the same shape, so everything downstream
@@ -54,7 +59,10 @@ export function applyOverrides<T extends AudioAnalysis>(
   if (!overrides) return analysis;
   const fixes = resolveOverrides(analysis, overrides);
   const key = fixes.key ? manualKey(fixes.key) : analysis.key;
-  if (!isGridCorrected(fixes)) return fixes.key ? { ...analysis, key } : analysis;
+  if (!isGridCorrected(fixes)) {
+    if (!fixes.key && fixes.phraseShift === 0) return analysis;
+    return { ...analysis, key, phrases: shiftPhrases(analysis.phrases, fixes.phraseShift, analysis.bars.lowDb.length) };
+  }
 
   const { tempoMultiplier: multiplier, downbeatShift: shift } = fixes;
   const offset = fixes.gridOffsetMs / 1000;
@@ -74,9 +82,13 @@ export function applyOverrides<T extends AudioAnalysis>(
 
   const end = duration ?? source.timeOf(BEATS_PER_BAR * analysis.bars.lowDb.length);
   const bars = rebinBars(analysis.bars, source, clock, end);
-  const phrases = remapPhrases(
-    analysis.phrases,
-    (bar) => clock.beatAt(source.timeOf(bar * BEATS_PER_BAR)) / BEATS_PER_BAR,
+  const phrases = shiftPhrases(
+    remapPhrases(
+      analysis.phrases,
+      (bar) => clock.beatAt(source.timeOf(bar * BEATS_PER_BAR)) / BEATS_PER_BAR,
+      bars.lowDb.length,
+    ),
+    fixes.phraseShift,
     bars.lowDb.length,
   );
 
@@ -137,7 +149,20 @@ export function resolveOverrides(
   const downbeatShift = Math.round(clock.beatAt(basis.downbeat) / step) * step;
   // Without a nudge the new analysis's beat phase wins; with one, the user's ear does.
   const gridOffsetMs = own.gridOffsetMs === 0 ? 0 : (basis.downbeat - clock.timeOf(downbeatShift)) * 1000;
-  return normalize({ tempoMultiplier, downbeatShift, gridOffsetMs, key: own.key });
+  return normalize({ tempoMultiplier, downbeatShift, gridOffsetMs, key: own.key, phraseShift: own.phraseShift });
+}
+
+/** Phrase boundaries moved `bars` later; the first phrase still starts at bar 0 and they tile the track. */
+function shiftPhrases(phrases: Phrase[], bars: number, barCount: number): Phrase[] {
+  if (bars === 0 || phrases.length === 0) return phrases;
+  const starts = phrases.map((p, i) => (i === 0 ? 0 : Math.min(barCount, Math.max(1, p.startBar + bars))));
+  const shifted: Phrase[] = [];
+  phrases.forEach((phrase, i) => {
+    const start = shifted.length === 0 ? 0 : starts[i];
+    const end = i + 1 < phrases.length ? starts[i + 1] : barCount;
+    if (end > start) shifted.push({ ...phrase, startBar: start, bars: end - start });
+  });
+  return shifted;
 }
 
 /** Applies one deck-control edit; returns what to store on the track (undefined when nothing is left). */
@@ -160,6 +185,9 @@ export function editOverrides(
     case 'downbeat':
       next.downbeatShift += edit.steps * downbeatStep(next.tempoMultiplier);
       break;
+    case 'phrase':
+      next.phraseShift += edit.bars;
+      break;
     case 'key':
       next.key = edit.camelot;
       break;
@@ -169,7 +197,7 @@ export function editOverrides(
 
 /** True when the resolved overrides change anything. */
 export function hasCorrections(fixes: ResolvedOverrides): boolean {
-  return isGridCorrected(fixes) || fixes.key !== null;
+  return isGridCorrected(fixes) || fixes.key !== null || fixes.phraseShift !== 0;
 }
 
 /**
@@ -190,17 +218,20 @@ function normalize(raw: {
   gridOffsetMs?: number;
   downbeatShift?: number;
   key?: string | null;
+  phraseShift?: number;
 }): ResolvedOverrides {
   const tempoMultiplier = raw.tempoMultiplier === 0.5 || raw.tempoMultiplier === 2 ? raw.tempoMultiplier : 1;
   const step = downbeatStep(tempoMultiplier);
   const barBeats = BEATS_PER_BAR / tempoMultiplier;
   const snapped = Math.floor(finite(raw.downbeatShift) / step + 1e-9) * step;
   const key = raw.key ? fromCamelot(raw.key) : null;
+  const phrase = Math.round(finite(raw.phraseShift));
   return {
     tempoMultiplier,
     gridOffsetMs: Math.round(finite(raw.gridOffsetMs) * 1000) / 1000 + 0,
     downbeatShift: snapped - barBeats * Math.round(snapped / barBeats) + 0,
     key: key && toCamelot(key),
+    phraseShift: ((((phrase + PHRASE_BARS / 2) % PHRASE_BARS) + PHRASE_BARS) % PHRASE_BARS) - PHRASE_BARS / 2 + 0,
   };
 }
 
@@ -210,6 +241,7 @@ function toStored(analysis: AudioAnalysis, fixes: ResolvedOverrides): AnalysisOv
   if (fixes.gridOffsetMs !== 0) stored.gridOffsetMs = fixes.gridOffsetMs;
   if (fixes.downbeatShift !== 0) stored.downbeatShift = fixes.downbeatShift;
   if (fixes.key) stored.key = fixes.key;
+  if (fixes.phraseShift !== 0) stored.phraseShift = fixes.phraseShift;
   if (isGridCorrected(fixes)) {
     stored.basis = {
       bpm: analysis.bpm,

@@ -99,6 +99,23 @@ export function OverrideControls({ analysis, overrides, onChange }: OverrideCont
       </div>
 
       <div className="fix-group">
+        <span className={active(fixes.phraseShift !== 0)}>Phrase</span>
+        <button
+          className="mode-button fix-button"
+          onClick={() => edit({ type: 'phrase', bars: -1 })}
+          title="Move the phrase lines (where mixes cue and enter) one bar earlier">
+          −1
+        </button>
+        <span className="fix-readout">{fixes.phraseShift === 0 ? '0' : `${fixes.phraseShift > 0 ? '+' : ''}${fixes.phraseShift}`} bar</span>
+        <button
+          className="mode-button fix-button"
+          onClick={() => edit({ type: 'phrase', bars: 1 })}
+          title="Move the phrase lines (where mixes cue and enter) one bar later">
+          +1
+        </button>
+      </div>
+
+      <div className="fix-group">
         <span className={active(fixes.key !== null)}>Key</span>
         <select
           className={`fix-select ${fixes.key ? 'active' : ''}`}
