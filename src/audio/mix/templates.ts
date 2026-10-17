@@ -16,16 +16,17 @@ export interface Lane {
 
 export const KILL = -Infinity;
 
-/** Duration of the bass handover, ending exactly on the swap downbeat. */
-const BASS_SWAP_BARS = 1 / 16;
+/** Duration of the bass handover (half a beat), ending exactly on the swap downbeat. */
+const BASS_SWAP_BARS = 1 / 8;
 /** Filter knob position the outgoing track is swept to (high-pass around 500 Hz). */
 const OUTRO_HIGHPASS = 0.55;
 
 /**
  * EQ blend around the bass swap. Incoming highs and mids are eased in first; the basslines
- * swap in one quarter beat right before the swap downbeat, so exactly one deck owns the low
- * end at any time; then the outgoing mids and highs give way and its remainder is filtered
- * and faded out. On a key clash the incoming mids stay out until the swap.
+ * swap in half a beat right before the swap downbeat, so exactly one deck owns the low end
+ * at any time; then the outgoing mids and highs give way and its remainder is filtered and
+ * faded out over most of what is left. On a key clash the incoming mids stay out until the
+ * swap.
  */
 export function blendTemplate(overlapBars: number, bassSwapBar: number, keyClash: boolean): Lane[] {
   const length = overlapBars;
@@ -39,10 +40,10 @@ export function blendTemplate(overlapBars: number, bassSwapBar: number, keyClash
         { bar: swap + after / 2, value: 0 },
       ]
     : [
-        { bar: 0, value: -12 },
-        { bar: swap / 2, value: -12 },
-        { bar: swap, value: -6 },
-        { bar: swap + after / 2, value: 0 },
+        { bar: 0, value: -9 },
+        { bar: swap / 2, value: -9 },
+        { bar: swap, value: -4 },
+        { bar: swap + after / 4, value: 0 },
       ];
 
   return [
@@ -90,7 +91,7 @@ export function blendTemplate(overlapBars: number, bassSwapBar: number, keyClash
       target: 'outgoing',
       control: 'fader',
       shape: 'fall',
-      points: [{ bar: length - after / 2, value: 1 }, { bar: length, value: 0 }],
+      points: [{ bar: swap + after / 4, value: 1 }, { bar: length, value: 0 }],
     },
   ];
 }

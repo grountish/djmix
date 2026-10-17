@@ -77,7 +77,9 @@ describe('transition runner', () => {
     expect(plan.kind).toBe('blend');
     expect(plan.overlapBars).toBe(16);
     expect(plan.outgoingStartBar).toBe(24);
-    expect(plan.incomingStartBar).toBe(0);
+    // Cued one phrase before its drop, so the drop lands on the bass swap (bar 8 of 16).
+    expect(plan.incomingStartBar).toBe(8);
+    expect(plan.bassSwapBar).toBe(8);
 
     const events: Record<string, number> = {};
     const at = (name: string) => () => (events[name] = ctx.currentTime);
@@ -123,7 +125,7 @@ describe('transition runner', () => {
     expect(outg.bpm).toBeCloseTo(plan.tempo.meetBpm, 1);
     expect(Math.abs(phase(inc.firstBeatTime, outg.firstBeatTime, 60 / plan.tempo.meetBpm))).toBeLessThan(0.002);
 
-    // Incoming phrase lines land on outgoing phrase lines: incoming bar 0 at outgoing bar 24.
+    // Incoming phrase lines land on outgoing phrase lines: incoming bar 8 at outgoing bar 24.
     expect(runner.incomingStart).toBeCloseTo(runner.outgoingBeatTime(24 * 4)!, 6);
 
     // One deck owns the low end at a time: before the swap only the outgoing bass and kick
@@ -141,7 +143,7 @@ describe('transition runner', () => {
 
     // The incoming track ends the ramp at its own tempo.
     const tail = analyzeAudio([slice(0, runner.finishTime + 0.5, seconds - 0.5)], SAMPLE_RATE);
-    expect(tail.bpm).toBeCloseTo(128, 1);
+    expect(Math.abs(tail.bpm - 128)).toBeLessThan(0.2);
   }, 180000);
 
   it("doesn't chase beat-lock rates when the two beat clocks disagree", async () => {

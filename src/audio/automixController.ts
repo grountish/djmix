@@ -137,8 +137,8 @@ export function describePlan(plan: TransitionPlan): string {
   const shift = plan.incomingSemitones ? ` (${plan.incomingSemitones > 0 ? '+' : ''}${plan.incomingSemitones} st)` : '';
   const what =
     plan.kind === 'blend'
-      ? `${plan.overlapBars}-bar blend at bar ${plan.outgoingStartBar + 1}, bass swap at bar ${plan.outgoingStartBar + plan.bassSwapBar + 1}`
-      : `cut at bar ${plan.outgoingStartBar + 1}`;
+      ? `${plan.overlapBars}-bar blend at bar ${plan.outgoingStartBar + 1}, next track in from its bar ${plan.incomingStartBar + 1}, bass swap at bar ${plan.outgoingStartBar + plan.bassSwapBar + 1}`
+      : `cut at bar ${plan.outgoingStartBar + 1} into bar ${plan.incomingStartBar + 1}`;
   const warnings = plan.warnings.length ? ` · ⚠ ${plan.warnings.join('; ')}` : '';
   return `Mix: ${what} · ${tempo} · ${keys}${shift}${warnings}`;
 }
