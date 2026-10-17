@@ -1,6 +1,12 @@
 import { useEffect, useRef } from 'react';
 import { effectiveAnalysis } from '@/audio/analysis/overrides';
-import { describePlan, previewTransition, secondsUntilPlan } from '@/audio/automixController';
+import {
+  describePlan,
+  formatCountdown,
+  previewTransition,
+  secondsUntilOverlap,
+  secondsUntilPlan,
+} from '@/audio/automixController';
 import { sequencerTrackFromAnalysis, suggestNext } from '@/audio/mix/sequencer';
 import { trackClock } from '@/audio/mix/trackClock';
 import type { DeckState, Track } from '@/types';
@@ -32,11 +38,6 @@ function autoDecks(deckA: DeckState, deckB: DeckState, played: string[]): AutoDe
     idle: decks.find((d) => d.id !== current.id)!,
     used: new Set([...played, current.track.id]),
   };
-}
-
-function formatWait(seconds: number): string {
-  const s = Math.max(0, Math.round(seconds));
-  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 }
 
 /**
@@ -108,7 +109,8 @@ export function useAutoDj(): void {
         actions.triggerAutomix('end');
         return;
       }
-      const status = `Auto: next mix in ${formatWait(wait)} → ${idleTrack.title || idleTrack.fileName} · ${describePlan(plan).replace(/^Mix: /, '')}`;
+      const untilHeard = secondsUntilOverlap(decks.current.id, outgoing, plan);
+      const status = `Mixing in ${formatCountdown(untilHeard)} → ${idleTrack.title || idleTrack.fileName} · ${describePlan(plan)}`;
       if (status !== state.automix.status) actions.setAutomixStatus(status);
     }, CHECK_INTERVAL_MS);
     return () => clearInterval(timer);

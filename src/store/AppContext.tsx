@@ -24,7 +24,7 @@ import {
   setDeckFilter,
   setMasterVolume,
 } from '@/audio/mixingEngine';
-import { cancelTransition, describePlan, startAutomixTransition } from '@/audio/automixController';
+import { cancelTransition, describePlan, formatCountdown, startAutomixTransition } from '@/audio/automixController';
 import { orderSet, sequencerTrackFromAnalysis, type TempoDirection } from '@/audio/mix/sequencer';
 import type { MixTiming } from '@/audio/mix/mixPoints';
 import { eqDbToGain } from '@/audio/mix/templates';
@@ -599,9 +599,15 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         apply(snapped);
       };
       let outgoingStopped = false;
+      let incomingStarted = false;
+      // The status line counts down to the moment the next track is heard, then names the mix.
+      const targetName = target.track?.title || target.track?.fileName;
+      let planText = '';
       const plan = startAutomixTransition(sourceDeckId, sourceAnalysis, targetAnalysis, timing, {
         onIncomingStarted: () => {
+          incomingStarted = true;
           dispatch({ type: 'SET_DECK_PLAYING', deck: targetDeckId, isPlaying: true });
+          dispatch({ type: 'SET_AUTOMIX_STATUS', status: `Mixing → ${targetName} · ${planText}` });
         },
         onOutgoingStopped: () => {
           outgoingStopped = true;
@@ -618,7 +624,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           dispatch({ type: 'MARK_PLAYED', trackId: sourceTrackId });
           dispatch({ type: 'SET_AUTOMIX_STATUS', status: `Mixed into ${target.track?.title || target.track?.fileName}` });
         },
-        onTick: (rates, lanes) => {
+        onTick: (rates, lanes, secondsToStart) => {
+          if (!incomingStarted) {
+            show('countdown', secondsToStart, 1, (seconds) =>
+              dispatch({ type: 'SET_AUTOMIX_STATUS', status: `Mixing in ${formatCountdown(seconds)} → ${targetName} · ${planText}` }),
+            );
+          }
           for (const deck of ['A', 'B'] as const) {
             show(`${deck}.rate`, rates[deck], LIVE_RATE_STEP, (rate) =>
               dispatch({ type: 'SET_DECK_PLAYBACK_RATE', deck, rate }),
@@ -658,7 +669,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       dispatch({ type: 'SET_DECK_MODE', deck: 'B', mode: 'stretch' });
       dispatch({ type: 'SET_AUTOMIX_TRANSITIONING', isTransitioning: true });
       dispatch({ type: 'SET_AUTOMIX_ACTIVE_DECK', deck: sourceDeckId });
-      dispatch({ type: 'SET_AUTOMIX_STATUS', status: describePlan(plan) });
+      planText = describePlan(plan);
+      dispatch({ type: 'SET_AUTOMIX_STATUS', status: `Mixing soon → ${targetName} · ${planText}` });
     }, [state.deckA, state.deckB]),
 
     releaseAutomix,

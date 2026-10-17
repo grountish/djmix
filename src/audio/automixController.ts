@@ -12,8 +12,11 @@ export interface AutomixCallbacks {
   onIncomingStarted: () => void;
   onOutgoingStopped: () => void;
   onFinished: () => void;
-  /** Each tick: every deck's playback rate and where the automated controls stand. */
-  onTick?: (rates: Record<DeckId, number>, lanes: LaneValues) => void;
+  /**
+   * Each tick: every deck's playback rate, where the automated controls stand, and seconds
+   * until the incoming deck is heard (negative once it is).
+   */
+  onTick?: (rates: Record<DeckId, number>, lanes: LaneValues, secondsToStart: number) => void;
 }
 
 /** Dispatch tick; timers keep running while the window is hidden (Electron throttling off). */
@@ -52,9 +55,23 @@ export function previewTransition(
 
 /** Seconds until the plan's outgoing tempo ramp (its first audible change) begins. */
 export function secondsUntilPlan(outgoingId: DeckId, outgoing: AudioAnalysis, plan: TransitionPlan): number {
+  return secondsUntilBar(outgoingId, outgoing, plan.outgoingRampStartBar);
+}
+
+/** Seconds until the incoming track is heard: the overlap starts. */
+export function secondsUntilOverlap(outgoingId: DeckId, outgoing: AudioAnalysis, plan: TransitionPlan): number {
+  return secondsUntilBar(outgoingId, outgoing, plan.outgoingStartBar);
+}
+
+function secondsUntilBar(outgoingId: DeckId, outgoing: AudioAnalysis, bar: number): number {
   const player = getDeckPlayer(outgoingId);
-  const rampStart = trackClock(outgoing).timeOf(plan.outgoingRampStartBar * 4);
-  return (rampStart - player.currentTime()) / player.currentRate;
+  return (trackClock(outgoing).timeOf(bar * 4) - player.currentTime()) / player.currentRate;
+}
+
+/** m:ss, never negative. */
+export function formatCountdown(seconds: number): string {
+  const s = Math.max(0, Math.ceil(seconds));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 }
 
 /**
@@ -107,6 +124,7 @@ export function startAutomixTransition(
     callbacks.onTick?.(
       { A: getDeckPlayer('A').currentRate, B: getDeckPlayer('B').currentRate },
       runner.laneValues(now),
+      runner.incomingStart - now,
     );
   }, DISPATCH_INTERVAL_MS);
   active = { runner, timer, incomingId };
@@ -130,7 +148,7 @@ export function cancelTransition(): { incomingId: DeckId; incomingStarted: boole
   return { incomingId, incomingStarted: runner.incomingStarted(getMixGraph().ctx.currentTime) };
 }
 
-/** One line for the status bar. */
+/** The plan in one line, without a lead-in: "32-bar blend at bar 97, … · 124.0 BPM · 8A→8A". */
 export function describePlan(plan: TransitionPlan): string {
   const tempo = `${plan.tempo.meetBpm.toFixed(1)} BPM`;
   const keys = `${plan.harmonic.outgoingKey}→${plan.harmonic.incomingKey}`;
@@ -140,5 +158,5 @@ export function describePlan(plan: TransitionPlan): string {
       ? `${plan.overlapBars}-bar blend at bar ${plan.outgoingStartBar + 1}, next track in from its bar ${plan.incomingStartBar + 1}, bass swap at bar ${plan.outgoingStartBar + plan.bassSwapBar + 1}`
       : `cut at bar ${plan.outgoingStartBar + 1} into bar ${plan.incomingStartBar + 1}`;
   const warnings = plan.warnings.length ? ` · ⚠ ${plan.warnings.join('; ')}` : '';
-  return `Mix: ${what} · ${tempo} · ${keys}${shift}${warnings}`;
+  return `${what} · ${tempo} · ${keys}${shift}${warnings}`;
 }
