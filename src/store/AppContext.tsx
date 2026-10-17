@@ -1,19 +1,38 @@
 import React, { createContext, useContext, useReducer, useCallback, useEffect, useRef } from 'react';
-import type { AnalysisOverrides, Track, DeckState, EqBand, PlaybackMode, SortOption, FilterOptions } from '@/types';
+import type {
+  AnalysisOverrides,
+  CrossfaderSettings,
+  DeckState,
+  EqBand,
+  FilterOptions,
+  FxSettings,
+  LoopState,
+  PlaybackMode,
+  SortOption,
+  SyncMode,
+  Track,
+} from '@/types';
 import { effectiveAnalysis } from '@/audio/analysis/overrides';
 import { mergeTracks } from './library';
+import { loadMixerPrefs, saveMixerPrefs } from './mixerPrefs';
 import {
+  getDeckLoop,
   loadAudioBufferToDeck,
   playDeck,
+  playDeckInSync,
   seekDeck,
+  setDeckGrid,
   setDeckTimeUpdateCallback,
   setDeckEndedCallback,
-  syncDeckToTargetBpm,
   setDeckPlaybackMode,
   setDeckPlaybackRate,
+  syncDeckPhase,
   isDeckEnginePlaying,
   forceStopDeck,
 } from '@/audio/playbackEngine';
+import { setCrossfaderCurve as applyCrossfaderCurve, setDeckFx as applyDeckFx, setDeckFxTempo } from '@/audio/fxEngine';
+import { DEFAULT_FX } from '@/audio/engine/fx';
+import { trackClock } from '@/audio/mix/trackClock';
 import { isElectronEnvironment } from '@/audio/fileImporter';
 import { decodeAudioFile } from '@/audio/decoder';
 import { ensureWaveform, type WaveformOverview } from '@/audio/waveformCache';
@@ -61,6 +80,9 @@ export interface AppState {
   deckA: DeckState;
   deckB: DeckState;
   crossfader: number;
+  crossfaderCurve: CrossfaderSettings;
+  /** What SYNC lines up. */
+  syncMode: SyncMode;
   masterVolume: number;
   referenceTrackId: string | null;
   /** Track ids automix plays next, in order. */
@@ -99,7 +121,12 @@ type Action =
   | { type: 'SET_DECK_CUE'; deck: 'A' | 'B'; cuePoint: number | null }
   | { type: 'SET_DECK_EQ'; deck: 'A' | 'B'; band: EqBand; value: number }
   | { type: 'SET_DECK_FILTER'; deck: 'A' | 'B'; value: number }
+  | { type: 'SET_DECK_LOOP'; deck: 'A' | 'B'; loop: LoopState | null }
+  | { type: 'SET_DECK_FX'; deck: 'A' | 'B'; fx: FxSettings }
+  | { type: 'SET_DECK_TRIM'; deck: 'A' | 'B'; trimDb: number }
   | { type: 'SET_CROSSFADER'; value: number }
+  | { type: 'SET_CROSSFADER_CURVE'; settings: CrossfaderSettings }
+  | { type: 'SET_SYNC_MODE'; mode: SyncMode }
   | { type: 'SET_MASTER_VOLUME'; volume: number }
   | { type: 'SET_REFERENCE_TRACK'; trackId: string | null }
   | { type: 'SET_AUTOMIX_ENABLED'; enabled: boolean }
@@ -126,7 +153,12 @@ const createInitialDeckState = (): DeckState => ({
   playbackMode: 'rate',
   eq: { low: 0, mid: 0, high: 0 },
   filter: 0,
+  loop: null,
+  fx: { ...DEFAULT_FX },
+  trimDb: 0,
 });
+
+const mixerPrefs = loadMixerPrefs();
 
 const initialState: AppState = {
   tracks: [],
@@ -135,6 +167,8 @@ const initialState: AppState = {
   deckA: createInitialDeckState(),
   deckB: createInitialDeckState(),
   crossfader: 0,
+  crossfaderCurve: mixerPrefs.crossfader,
+  syncMode: mixerPrefs.syncMode,
   masterVolume: 1,
   referenceTrackId: null,
   queue: [],
@@ -218,6 +252,7 @@ function reducer(state: AppState, action: Action): AppState {
           ...state[deckKey],
           track: action.track,
           cuePoint: null,
+          loop: null,
           playback: {
             ...state[deckKey].playback,
             currentTime: 0,
@@ -312,8 +347,29 @@ function reducer(state: AppState, action: Action): AppState {
       return { ...state, [deckKey]: { ...state[deckKey], filter: action.value } };
     }
 
+    case 'SET_DECK_LOOP': {
+      const deckKey = action.deck === 'A' ? 'deckA' : 'deckB';
+      return { ...state, [deckKey]: { ...state[deckKey], loop: action.loop } };
+    }
+
+    case 'SET_DECK_FX': {
+      const deckKey = action.deck === 'A' ? 'deckA' : 'deckB';
+      return { ...state, [deckKey]: { ...state[deckKey], fx: action.fx } };
+    }
+
+    case 'SET_DECK_TRIM': {
+      const deckKey = action.deck === 'A' ? 'deckA' : 'deckB';
+      return { ...state, [deckKey]: { ...state[deckKey], trimDb: action.trimDb } };
+    }
+
     case 'SET_CROSSFADER':
       return { ...state, crossfader: action.value };
+
+    case 'SET_CROSSFADER_CURVE':
+      return { ...state, crossfaderCurve: action.settings };
+
+    case 'SET_SYNC_MODE':
+      return { ...state, syncMode: action.mode };
 
     case 'SET_MASTER_VOLUME':
       return { ...state, masterVolume: action.volume };
@@ -391,9 +447,27 @@ interface AppContextValue {
     setDeckFilter: (deck: 'A' | 'B', value: number) => void;
     setDeckPitch: (deck: 'A' | 'B', rate: number) => void;
     setCrossfader: (value: number) => void;
+    setCrossfaderCurve: (settings: CrossfaderSettings) => void;
     setMasterVolume: (volume: number) => void;
     setReferenceTrack: (trackId: string | null) => void;
+    /**
+     * SYNC: matches the other deck's playing tempo (or the target BPM). In beat / bar / phrase
+     * mode a playing deck also jumps into phase with the other deck, and a stopped one starts
+     * in phase on its next beat or bar.
+     */
     syncToTarget: (deck: 'A' | 'B') => void;
+    setSyncMode: (mode: SyncMode) => void;
+    /** Loops `beats` beats from the beat nearest the playhead. */
+    setDeckLoop: (deck: 'A' | 'B', beats: number) => void;
+    loopIn: (deck: 'A' | 'B') => void;
+    loopOut: (deck: 'A' | 'B') => void;
+    loopHalve: (deck: 'A' | 'B') => void;
+    loopDouble: (deck: 'A' | 'B') => void;
+    /** Exits a running loop, re-enters a kept one, or loops 4 bars without one. */
+    loopToggle: (deck: 'A' | 'B') => void;
+    setDeckFx: (deck: 'A' | 'B', fx: FxSettings) => void;
+    /** Gain knob: dB on top of the automatic loudness trim. */
+    setDeckTrim: (deck: 'A' | 'B', trimDb: number) => void;
     setAutomixEnabled: (enabled: boolean) => void;
     setAutomixStatus: (status: string | null) => void;
     /** 'now': at the next 16/32-bar entry (Mix now). 'end': where the playing track runs out (Auto). */
@@ -471,6 +545,59 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     dispatch({ type: 'SET_AUTOMIX_STATUS', status: `Auto off: ${reason}` });
   }, []);
 
+  /** Connects a deck's loop controller to the store, once. */
+  const loopsWired = useRef(new Set<'A' | 'B'>());
+  const wireLoop = useCallback((deck: 'A' | 'B') => {
+    if (loopsWired.current.has(deck)) return;
+    loopsWired.current.add(deck);
+    const loop = getDeckLoop(deck);
+    loop.onChange = () => {
+      const region = loop.currentRegion;
+      dispatch({ type: 'SET_DECK_LOOP', deck, loop: region ? { ...region, active: loop.isActive } : null });
+    };
+  }, []);
+
+  /** A loop move by hand takes over from automix (which schedules jumps of its own). */
+  const withLoop = useCallback(
+    (deck: 'A' | 'B', reason: string, move: (loop: ReturnType<typeof getDeckLoop>) => void) => {
+      const deckState = deck === 'A' ? stateRef.current.deckA : stateRef.current.deckB;
+      if (!deckState.track) return;
+      releaseAutomix(`deck ${deck} ${reason}`);
+      wireLoop(deck);
+      move(getDeckLoop(deck));
+    },
+    [releaseAutomix, wireLoop],
+  );
+
+  /** The decks' playing tempo for the beat-synced effects, and the deck's trim. */
+  const deckTempo = (deck: DeckState): number | undefined => {
+    const bpm = deck.track && effectiveAnalysis(deck.track)?.bpm;
+    return bpm ? bpm * deck.playback.playbackRate : undefined;
+  };
+
+  // The engine follows the loaded track: its grid (loops, sync), its loudness (trim) and
+  // tempo (effects). Covers an analysis that finishes after the load and a corrected grid.
+  useEffect(() => {
+    for (const id of ['A', 'B'] as const) {
+      const deck = id === 'A' ? state.deckA : state.deckB;
+      const analysis = deck.track ? effectiveAnalysis(deck.track) : null;
+      setDeckGrid(id, analysis ? trackClock(analysis) : null, analysis?.phrases);
+      setDeckAutoGain(id, analysis?.loudness.integratedLufs, deck.trimDb);
+    }
+  }, [state.deckA.track, state.deckA.trimDb, state.deckB.track, state.deckB.trimDb]);
+
+  useEffect(() => {
+    for (const id of ['A', 'B'] as const) {
+      const bpm = deckTempo(id === 'A' ? state.deckA : state.deckB);
+      if (bpm) setDeckFxTempo(id, bpm);
+    }
+  }, [state.deckA.track, state.deckA.playback.playbackRate, state.deckB.track, state.deckB.playback.playbackRate]);
+
+  // The saved crossfader law, applied once the graph exists.
+  useEffect(() => {
+    applyCrossfaderCurve(initialState.crossfaderCurve);
+  }, []);
+
   const actions: AppContextValue['actions'] = {
     addTracks: useCallback((tracks: Track[]) => {
       dispatch({ type: 'ADD_TRACKS', tracks });
@@ -514,7 +641,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
         // Reset playback rate to 1 when loading a new track
         setDeckPlaybackRate(deck, 1);
-        setDeckAutoGain(deck, track.analysis?.loudness.integratedLufs);
+        const deckState = deck === 'A' ? stateRef.current.deckA : stateRef.current.deckB;
+        setDeckAutoGain(deck, track.analysis?.loudness.integratedLufs, deckState.trimDb);
+        wireLoop(deck);
+        dispatch({ type: 'SET_DECK_LOOP', deck, loop: null });
         dispatch({ type: 'SET_DECK_PLAYBACK_RATE', deck, rate: 1 });
         dispatch({ type: 'SET_DECK_TRACK', deck, track: loaded });
         if (waveform && !track.waveformData) dispatch({ type: 'SET_TRACK_WAVEFORM', trackId: track.id, waveform });
@@ -527,7 +657,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           dispatch({ type: 'SET_DECK_PLAYING', deck, isPlaying: false });
         });
       },
-      [releaseAutomix],
+      [releaseAutomix, wireLoop],
     ),
 
     playPauseDeck: useCallback((deck: 'A' | 'B') => {
@@ -616,6 +746,45 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       dispatch({ type: 'SET_CROSSFADER', value });
     }, [releaseAutomix]),
 
+    setCrossfaderCurve: useCallback((settings: CrossfaderSettings) => {
+      applyCrossfaderCurve(settings);
+      dispatch({ type: 'SET_CROSSFADER_CURVE', settings });
+      saveMixerPrefs({ crossfader: settings, syncMode: stateRef.current.syncMode });
+    }, []),
+
+    setSyncMode: useCallback((mode: SyncMode) => {
+      dispatch({ type: 'SET_SYNC_MODE', mode });
+      saveMixerPrefs({ crossfader: stateRef.current.crossfaderCurve, syncMode: mode });
+    }, []),
+
+    setDeckLoop: useCallback((deck: 'A' | 'B', beats: number) => withLoop(deck, 'looped', (loop) => loop.autoLoop(beats)), [withLoop]),
+    loopIn: useCallback((deck: 'A' | 'B') => withLoop(deck, 'loop in', (loop) => loop.loopIn()), [withLoop]),
+    loopOut: useCallback((deck: 'A' | 'B') => withLoop(deck, 'loop out', (loop) => loop.loopOut()), [withLoop]),
+    loopHalve: useCallback((deck: 'A' | 'B') => withLoop(deck, 'loop halved', (loop) => loop.halve()), [withLoop]),
+    loopDouble: useCallback((deck: 'A' | 'B') => withLoop(deck, 'loop doubled', (loop) => loop.double()), [withLoop]),
+    loopToggle: useCallback(
+      (deck: 'A' | 'B') =>
+        withLoop(deck, 'loop toggled', (loop) => {
+          if (loop.isActive) loop.exit();
+          else if (loop.currentRegion) loop.reloop();
+          else loop.autoLoop(16);
+        }),
+      [withLoop],
+    ),
+
+    setDeckFx: useCallback((deck: 'A' | 'B', fx: FxSettings) => {
+      applyDeckFx(deck, fx);
+      const bpm = deckTempo(deck === 'A' ? stateRef.current.deckA : stateRef.current.deckB);
+      if (bpm) setDeckFxTempo(deck, bpm);
+      dispatch({ type: 'SET_DECK_FX', deck, fx });
+    }, []),
+
+    setDeckTrim: useCallback((deck: 'A' | 'B', trimDb: number) => {
+      const deckState = deck === 'A' ? stateRef.current.deckA : stateRef.current.deckB;
+      setDeckAutoGain(deck, deckState.track?.analysis?.loudness.integratedLufs, trimDb);
+      dispatch({ type: 'SET_DECK_TRIM', deck, trimDb });
+    }, []),
+
     setMasterVolume: useCallback((volume: number) => {
       setMasterVolume(volume);
       dispatch({ type: 'SET_MASTER_VOLUME', volume });
@@ -627,31 +796,33 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
     syncToTarget: useCallback(
       (deck: 'A' | 'B') => {
-        const deckState = deck === 'A' ? state.deckA : state.deckB;
-        const otherDeckState = deck === 'A' ? state.deckB : state.deckA;
-        const track = deckState.track;
-        const otherTrack = otherDeckState.track;
+        const current = stateRef.current;
+        const other: 'A' | 'B' = deck === 'A' ? 'B' : 'A';
+        const deckState = deck === 'A' ? current.deckA : current.deckB;
+        const otherDeckState = other === 'A' ? current.deckA : current.deckB;
 
-        // Get source BPM from current deck
-        const sourceBpm = track && effectiveAnalysis(track)?.bpm;
+        const sourceBpm = deckState.track && effectiveAnalysis(deckState.track)?.bpm;
         if (!sourceBpm) return;
 
-        // Get target BPM from other deck's track, or fall back to manual targetBpm
-        let targetBpm: number | null = null;
-        const otherBpm = otherTrack && effectiveAnalysis(otherTrack)?.bpm;
-        if (otherBpm) {
-          targetBpm = otherBpm;
-        } else if (deckState.targetBpm) {
-          targetBpm = deckState.targetBpm;
-        }
-
+        // The other deck's playing tempo (its tempo fader included), else the target BPM.
+        const otherBpm = otherDeckState.track && effectiveAnalysis(otherDeckState.track)?.bpm;
+        const targetBpm = otherBpm ? otherBpm * otherDeckState.playback.playbackRate : deckState.targetBpm;
         if (!targetBpm) return;
+        const rate = targetBpm / sourceBpm;
 
         releaseAutomix(`deck ${deck} synced`);
-        syncDeckToTargetBpm(deck, sourceBpm, targetBpm);
-        dispatch({ type: 'SET_DECK_PLAYBACK_RATE', deck, rate: targetBpm / sourceBpm });
+        const mode = current.syncMode;
+        const masterPlaying = !!otherBpm && isDeckEnginePlaying(other);
+        if (!masterPlaying || mode === 'tempo') {
+          setDeckPlaybackRate(deck, rate);
+        } else if (isDeckEnginePlaying(deck)) {
+          syncDeckPhase(deck, other, mode, rate);
+        } else if (playDeckInSync(deck, other, mode, rate)) {
+          dispatch({ type: 'SET_DECK_PLAYING', deck, isPlaying: true });
+        }
+        dispatch({ type: 'SET_DECK_PLAYBACK_RATE', deck, rate });
       },
-      [state.deckA, state.deckB, releaseAutomix],
+      [releaseAutomix],
     ),
 
     setAutomixEnabled: useCallback((enabled: boolean) => {

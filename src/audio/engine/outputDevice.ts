@@ -24,7 +24,12 @@ export async function listOutputDevices(): Promise<OutputDevice[]> {
   const devices: OutputDevice[] = [DEFAULT_OUTPUT];
   const media = globalThis.navigator?.mediaDevices;
   if (!media?.enumerateDevices) return devices;
-  const all = await media.enumerateDevices();
+  let all: MediaDeviceInfo[];
+  try {
+    all = await media.enumerateDevices();
+  } catch {
+    return devices;
+  }
   let unnamed = 0;
   for (const device of all) {
     if (device.kind !== 'audiooutput' || !device.deviceId || device.deviceId === 'default') continue;

@@ -55,7 +55,7 @@ export async function loadAudioBufferToDeck(deckId: DeckId, audioBuffer: AudioBu
   await deck.player.load(audioBuffer);
 }
 
-/** The loaded track's grid and phrases: loops snap to it and sync aligns by it. Clears any loop. */
+/** The loaded track's grid and phrases: loops snap to it and sync aligns by it. */
 export function setDeckGrid(deckId: DeckId, clock: BeatClock | null, phrases?: Phrase[]): void {
   const deck = getDeck(deckId);
   deck.clock = clock;

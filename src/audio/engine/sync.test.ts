@@ -51,27 +51,56 @@ describe('phaseSyncTarget', () => {
     expect(followerClock.beatAt(forward)).toBeCloseTo(10.6, 9);
   });
 
-  it('phrase mode lands the same distance into the nearest phrase, 16-bar grid by default', () => {
+  it('phrase mode lines the phrases up on a 16-bar grid by default', () => {
     // Master at bar 1.65 of its phrase 0 (bars 0–16). Follower at bar 33: nearest phrase starts
-    // at bar 32, so it should go to bar 33.65.
+    // at bar 32, so it should go to bar 33.65 (14.35 bars to go, like the master).
     const target = phaseSyncTarget('phrase', master, { clock: followerClock, trackTime: followerClock.timeOf(33 * 4) }, at);
     expect(followerClock.beatAt(target) / 4).toBeCloseTo(33.65, 9);
   });
 
-  it('phrase mode follows analysed phrases', () => {
-    // Master phrases: 0–8 intro, 8–24 build. At bar 10.65 it is 2.65 bars into the build.
+  it('phrase mode makes the phrases change together', () => {
+    // Master phrases: 0–8 intro, 8–24 build. At bar 10.65 it has 13.35 bars of build to go.
     const m = { ...master, phrases: [phrase(0, 8), phrase(8, 16)] };
     const atBar10 = master.anchor.ctxTime + master.clock.timeOf(10.65 * 4);
-    // Follower phrases: 0–16, 16–48. At bar 20 the nearest phrase position is 16 + 2.65.
+    // Follower phrases: 0–16, 16–48. At bar 20 the nearest position with 13.35 bars to go is
+    // 48 - 13.35 in the second phrase (the first's would be 2.65, further away).
     const f = { clock: followerClock, trackTime: followerClock.timeOf(20 * 4), phrases: [phrase(0, 16), phrase(16, 32)] };
     const target = phaseSyncTarget('phrase', m, f, atBar10);
-    expect(followerClock.beatAt(target) / 4).toBeCloseTo(18.65, 9);
+    expect(followerClock.beatAt(target) / 4).toBeCloseTo(34.65, 9);
+    // A follower near its first phrase takes that one: 16 - 13.35.
+    const early = phaseSyncTarget('phrase', m, { ...f, trackTime: followerClock.timeOf(4 * 4) }, atBar10);
+    expect(followerClock.beatAt(early) / 4).toBeCloseTo(2.65, 9);
     // Past the follower's last phrase the grid keeps going every 16 bars: bar 58 → 48 + 2.65,
     // bar 60 is nearer to 64 + 2.65.
     const late = phaseSyncTarget('phrase', m, { ...f, trackTime: followerClock.timeOf(58 * 4) }, atBar10);
     expect(followerClock.beatAt(late) / 4).toBeCloseTo(50.65, 9);
     const later = phaseSyncTarget('phrase', m, { ...f, trackTime: followerClock.timeOf(60 * 4) }, atBar10);
     expect(followerClock.beatAt(later) / 4).toBeCloseTo(66.65, 9);
+  });
+});
+
+describe('phaseSyncTarget at the start of a track', () => {
+  it('never lands before the track starts: it takes the next position in phase', () => {
+    // Master on beat 6.536 at 13.268: a follower parked at 0 (beat -0.2 of its own grid) would
+    // land at beat -0.464 for beat sync; it goes to beat 0.536 instead, and to beat 2.536 for
+    // bar sync rather than -1.464.
+    const at = 10 + 6.536 * 0.5;
+    const parked = { clock: followerClock, trackTime: 0 };
+    expect(followerClock.beatAt(phaseSyncTarget('beat', master, parked, at))).toBeCloseTo(0.536, 9);
+    expect(followerClock.beatAt(phaseSyncTarget('bar', master, parked, at))).toBeCloseTo(2.536, 9);
+    expect(phaseSyncTarget('phrase', master, parked, at)).toBeGreaterThanOrEqual(0);
+  });
+});
+
+describe('phrase mode with phrases too short for the master', () => {
+  it('falls back to the same distance into the nearest phrase', () => {
+    // Master in a 32-bar phrase with 20 bars to go (12 in); follower phrases are 8 bars long.
+    const m = { ...master, phrases: [phrase(0, 32)] };
+    const atBar12 = master.anchor.ctxTime + master.clock.timeOf(12 * 4);
+    const f = { clock: followerClock, trackTime: followerClock.timeOf(9 * 4), phrases: [phrase(0, 8), phrase(8, 8)] };
+    // The grid cells after the phrases are 16 bars: still too short. Nearest start + 12 to bar 9
+    // is 0 + 12 (8 + 12 is further).
+    expect(followerClock.beatAt(phaseSyncTarget('phrase', m, f, atBar12)) / 4).toBeCloseTo(12, 9);
   });
 });
 

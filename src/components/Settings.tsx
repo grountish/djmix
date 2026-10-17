@@ -12,6 +12,7 @@ import {
   applyOutputDevice,
   canSelectOutput,
   type ContextInfo,
+  DEFAULT_OUTPUT,
   describeContext,
   listOutputDevices,
   type OutputDevice,
@@ -30,7 +31,7 @@ export function Settings({ onClose }: SettingsProps) {
   const [settings, setSettings] = useState<AudioSettings>(() => loadAudioSettings());
   /** What the running context was opened with, to say when a restart is needed. */
   const applied = useRef<AudioSettings>(loadAudioSettings());
-  const [devices, setDevices] = useState<OutputDevice[]>([]);
+  const [devices, setDevices] = useState<OutputDevice[]>([DEFAULT_OUTPUT]);
   const [info, setInfo] = useState<ContextInfo | null>(null);
   const [canRoute, setCanRoute] = useState(true);
   const [error, setError] = useState<string | null>(null);

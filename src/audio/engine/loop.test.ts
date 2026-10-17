@@ -118,7 +118,9 @@ describe('LoopController', () => {
     loop.reloop();
     expect(loop.isActive).toBe(true);
     expect(deck.currentTime()).toBe(1.3);
-    loop.setClock(null);
+    loop.setClock(null); // A grid change keeps the loop: it is in seconds.
+    expect(loop.currentRegion).toEqual({ start: 1.3, end: 2.6 });
+    loop.clear();
     expect(loop.currentRegion).toBeNull();
     expect(loop.isActive).toBe(false);
   });

@@ -1440,3 +1440,121 @@ select {
 .status-automix {
   color: var(--accent);
 }
+
+/* Loop row (deck) */
+.deck-loop {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 8px 8px;
+}
+
+.tbtn-small {
+  min-width: 36px;
+  padding: 0 6px;
+}
+
+.tbtn-loop {
+  min-width: 74px;
+  font-family: var(--mono);
+}
+
+.tbtn-loop.active {
+  background: var(--yellow);
+  border-color: var(--yellow);
+  color: #111;
+}
+
+.tbtn-loop.set {
+  color: var(--yellow);
+  border-color: var(--yellow);
+}
+
+.tbtn-size {
+  min-width: 26px;
+  padding: 0 4px;
+  font-family: var(--mono);
+}
+
+.tbtn-size.active {
+  background: var(--yellow);
+  border-color: var(--yellow);
+  color: #111;
+}
+
+/* Sync mode and audio settings (top bar) */
+.topbar-sync {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  color: var(--text-3);
+}
+
+.topbar-sync select {
+  height: 20px;
+  padding: 0 4px;
+  font-size: 10px;
+  color: var(--text-2);
+  background: #0f0f0f;
+  border: 1px solid var(--line-2);
+  border-radius: 3px;
+}
+
+/* Mixer: effects */
+.mixer-fx {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-top: 6px;
+  border-top: 1px solid var(--line);
+}
+
+.mixer-select {
+  width: 66px;
+  height: 20px;
+  padding: 0 3px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  color: var(--text-2);
+  background: #0f0f0f;
+  border: 1px solid var(--line-2);
+  border-radius: 3px;
+}
+
+.mixer-select.on {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.mixer-select:disabled {
+  color: var(--text-4);
+}
+
+/* Crossfader curve */
+.xf-curve {
+  display: flex;
+  justify-content: center;
+  gap: 3px;
+}
+
+.xf-btn {
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 3px;
+  border: 1px solid var(--line-2);
+  background: var(--panel-3);
+  color: var(--text-3);
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+}
+
+.xf-btn.active {
+  color: var(--text);
+  background: var(--panel-2);
+  border-color: var(--text-3);
+}

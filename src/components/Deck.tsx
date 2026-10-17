@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState, type DragEvent } from 'react';
-import type { AnalysisOverrides, DeckState, PlaybackMode } from '@/types';
+import type { AnalysisOverrides, DeckState, PlaybackMode, SyncMode } from '@/types';
 import { effectiveAnalysis, hasCorrections, resolveOverrides } from '@/audio/analysis/overrides';
 import { trackClock } from '@/audio/mix/trackClock';
 import { KeyBadge } from './KeyBadge';
@@ -24,7 +24,36 @@ interface DeckProps {
   onDropTrack: (trackId: string) => void;
   /** The next mix, drawn on the waveform. */
   mixMarks?: MixMarks | null;
+  /** What SYNC lines up, for its tooltip. */
+  syncMode: SyncMode;
+  /** Loops `beats` beats from the nearest beat to the playhead. */
+  onLoop: (beats: number) => void;
+  onLoopIn: () => void;
+  onLoopOut: () => void;
+  onLoopHalve: () => void;
+  onLoopDouble: () => void;
+  /** Exits a running loop, re-enters a kept one, or loops 4 bars without one. */
+  onLoopToggle: () => void;
 }
+
+/** Quick auto-loop lengths, in bars. */
+const LOOP_BARS = [1, 2, 4, 8, 16];
+
+/** A loop length in beats as bars: "4", "1/2". */
+function formatLoopBars(beats: number): string {
+  const bars = beats / 4;
+  if (bars >= 1 && Math.abs(bars - Math.round(bars)) < 0.01) return String(Math.round(bars));
+  const denominator = Math.round(1 / bars);
+  if (denominator > 0 && Math.abs(bars * denominator - 1) < 0.01) return `1/${denominator}`;
+  return `${beats.toFixed(1)}b`;
+}
+
+const SYNC_TITLES: Record<SyncMode, string> = {
+  tempo: "Match the other deck's tempo (or the target BPM)",
+  beat: "Match the other deck's tempo and land on its beat; a stopped deck starts on its next beat",
+  bar: "Match the other deck's tempo and its bar line; a stopped deck starts on its next bar",
+  phrase: "Match the other deck's tempo and phrase position; a stopped deck starts on its next bar",
+};
 
 export function formatTime(seconds: number): string {
   const total = Math.max(0, Math.floor(seconds));
@@ -49,8 +78,15 @@ export function Deck({
   onOverridesChange,
   onDropTrack,
   mixMarks,
+  syncMode,
+  onLoop,
+  onLoopIn,
+  onLoopOut,
+  onLoopHalve,
+  onLoopDouble,
+  onLoopToggle,
 }: DeckProps) {
-  const { track, playback, targetBpm, playbackMode, cuePoint } = state;
+  const { track, playback, targetBpm, playbackMode, cuePoint, loop } = state;
   const [targetBpmInput, setTargetBpmInput] = useState(targetBpm?.toString() || '');
   const [showGrid, setShowGrid] = useState(false);
   const [dragOver, setDragOver] = useState(false);
@@ -84,6 +120,11 @@ export function Deck({
   const currentBpm = baseBpm ? baseBpm * playback.playbackRate : null;
   const pitchPercent = (basePitchRef.current - 1) * 100;
   const clock = analysis ? trackClock(analysis) : undefined;
+  const loopBeats = loop
+    ? clock
+      ? clock.beatAt(loop.end) - clock.beatAt(loop.start)
+      : (loop.end - loop.start) / (baseBpm ? 60 / baseBpm : 0.5)
+    : null;
 
   const handleTargetBpmSubmit = () => {
     const bpm = parseFloat(targetBpmInput);
@@ -167,6 +208,7 @@ export function Deck({
               phrases={analysis?.phrases}
               cuePoint={cuePoint}
               marks={mixMarks}
+              loop={loop}
               onSeek={onSeek}
             />
           ) : (
@@ -235,7 +277,7 @@ export function Deck({
           className="tbtn tbtn-sync"
           onClick={onSync}
           disabled={!track || !baseBpm || (!targetBpm && !otherDeckHasBpm)}
-          title="Match the other deck's tempo (or the target BPM)">
+          title={SYNC_TITLES[syncMode]}>
           SYNC
         </button>
         <button
@@ -263,6 +305,43 @@ export function Deck({
           title="Beat grid and key corrections">
           GRID
         </button>
+      </div>
+
+      <div className="deck-loop">
+        <button className="tbtn tbtn-small" onClick={onLoopIn} disabled={!track} title="Loop in: mark the loop start on the nearest beat">
+          IN
+        </button>
+        <button
+          className="tbtn tbtn-small"
+          onClick={onLoopOut}
+          disabled={!track}
+          title="Loop out: close the loop on the nearest beat and start looping">
+          OUT
+        </button>
+        <button
+          className={`tbtn tbtn-loop ${loop?.active ? 'active' : ''} ${loop && !loop.active ? 'set' : ''}`}
+          onClick={onLoopToggle}
+          disabled={!track}
+          title={loop?.active ? 'Exit the loop (it is kept)' : loop ? 'Loop again' : 'Loop 4 bars from the nearest beat'}>
+          {loop && loopBeats !== null ? `LOOP ${formatLoopBars(loopBeats)}` : 'LOOP'}
+        </button>
+        <button className="tbtn tbtn-small" onClick={onLoopHalve} disabled={!loop} title="Halve the loop">
+          ½
+        </button>
+        <button className="tbtn tbtn-small" onClick={onLoopDouble} disabled={!loop} title="Double the loop">
+          ×2
+        </button>
+        <span className="tbtn-gap" />
+        {LOOP_BARS.map((bars) => (
+          <button
+            key={bars}
+            className={`tbtn tbtn-size ${loop?.active && loopBeats !== null && Math.abs(loopBeats - bars * 4) < 0.01 ? 'active' : ''}`}
+            onClick={() => onLoop(bars * 4)}
+            disabled={!track}
+            title={`Loop ${bars} bar${bars === 1 ? '' : 's'} from the nearest beat`}>
+            {bars}
+          </button>
+        ))}
       </div>
 
       {showGrid && track?.analysis && (

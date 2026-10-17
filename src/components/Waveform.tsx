@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import type { BeatClock } from '@/audio/analysis/beatClock';
-import type { Phrase, PhraseLabel, SpectralWaveform } from '@/types';
+import type { LoopState, Phrase, PhraseLabel, SpectralWaveform } from '@/types';
 
 /** The next mix, in this track's bars, for drawing on its waveform. */
 export interface MixMarks {
@@ -28,6 +28,8 @@ interface WaveformProps {
   phrases?: Phrase[];
   cuePoint?: number | null;
   marks?: MixMarks | null;
+  /** The manual loop. */
+  loop?: LoopState | null;
   onSeek: (time: number) => void;
 }
 
@@ -133,6 +135,34 @@ function drawMarks(
   ctx.restore();
 }
 
+/** The manual loop: a band with solid edges while it wraps, dashed while it is kept. */
+function drawLoop(ctx: CanvasRenderingContext2D, loop: LoopState, x: (time: number) => number, w: number, h: number): void {
+  const x0 = x(loop.start);
+  const x1 = x(loop.end);
+  if (x1 < 0 || x0 > w) return;
+  const alpha = loop.active ? 1 : 0.55;
+  ctx.save();
+  const left = Math.max(0, x0);
+  const right = Math.min(w, x1);
+  ctx.fillStyle = `rgba(${LOOP_RGB},${0.16 * alpha})`;
+  ctx.fillRect(left, 0, right - left, h);
+  if (loop.active) {
+    ctx.fillStyle = `rgba(${LOOP_RGB},0.9)`;
+    ctx.fillRect(left, h - 3, right - left, 3);
+  }
+  ctx.strokeStyle = `rgba(${LOOP_RGB},${0.95 * alpha})`;
+  ctx.lineWidth = loop.active ? 1.5 : 1;
+  ctx.setLineDash(loop.active ? [] : [3, 3]);
+  for (const lx of [x0, x1]) {
+    if (lx < 0 || lx > w) continue;
+    ctx.beginPath();
+    ctx.moveTo(Math.floor(lx) + 0.5, 0);
+    ctx.lineTo(Math.floor(lx) + 0.5, h);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
 // Zoom levels in bars (4 beats per bar)
 const ZOOM_LEVELS = [2, 4, 8, 16, 32];
 const DEFAULT_ZOOM_INDEX = 2;
@@ -161,6 +191,7 @@ export function Waveform({
   phrases,
   cuePoint,
   marks,
+  loop,
   onSeek,
 }: WaveformProps) {
   const [zoomIndex, setZoomIndex] = useState(DEFAULT_ZOOM_INDEX);
@@ -272,6 +303,8 @@ export function Waveform({
         drawMarks(ctx, marks, clock, (time) => ((time - windowStart) / windowDuration) * w, w, h, true);
       }
 
+      if (loop) drawLoop(ctx, loop, (time) => ((time - windowStart) / windowDuration) * w, w, h);
+
       // Cue point.
       if (cuePoint !== null && cuePoint !== undefined && cuePoint >= windowStart && cuePoint <= windowEnd) {
         const x = Math.floor(((cuePoint - windowStart) / windowDuration) * w) + 0.5;
@@ -309,7 +342,7 @@ export function Waveform({
 
     rafRef.current = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(rafRef.current);
-  }, [data, spectralData, currentTime, duration, windowStart, windowEnd, windowDuration, bpm, clock, phrases, cuePoint, marks, width]);
+  }, [data, spectralData, currentTime, duration, windowStart, windowEnd, windowDuration, bpm, clock, phrases, cuePoint, marks, loop, width]);
 
   // Overview: the whole track pre-rendered once, then composited with the viewport and playhead.
   const cachedOverviewRef = useRef<HTMLCanvasElement | null>(null);
@@ -394,6 +427,7 @@ export function Waveform({
     ctx.strokeRect(Math.floor(viewportStart * w) + 0.5, 0.5, Math.max(2, viewportWidth * w) - 1, h - 1);
 
     if (marks && clock && duration > 0) drawMarks(ctx, marks, clock, (time) => (time / duration) * w, w, h, false);
+    if (loop && duration > 0) drawLoop(ctx, loop, (time) => (time / duration) * w, w, h);
 
     if (cuePoint !== null && cuePoint !== undefined && duration > 0) {
       const x = Math.floor((cuePoint / duration) * w) + 0.5;
@@ -411,7 +445,7 @@ export function Waveform({
     ctx.moveTo(playheadX, 0);
     ctx.lineTo(playheadX, h);
     ctx.stroke();
-  }, [overviewPlayhead, viewportStart, viewportWidth, cuePoint, marks, duration, width, data, spectralData, phrases, clock]);
+  }, [overviewPlayhead, viewportStart, viewportWidth, cuePoint, marks, loop, duration, width, data, spectralData, phrases, clock]);
 
   const handleOverviewClick = useCallback(
     (e: React.MouseEvent<HTMLCanvasElement>) => {

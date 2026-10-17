@@ -10,6 +10,17 @@ export type {
 } from '@/audio/analysis/types';
 export type { EqBand } from '@/audio/engine/mixGraph';
 import type { EqBand } from '@/audio/engine/mixGraph';
+export type { FxSettings, FxType } from '@/audio/engine/fx';
+import type { FxSettings } from '@/audio/engine/fx';
+export type { CrossfaderCurve, CrossfaderSettings } from '@/audio/engine/crossfaderCurve';
+export type { SyncMode } from '@/audio/engine/sync';
+
+/** A loop set by hand, in track seconds; `active` while the deck wraps round it. */
+export interface LoopState {
+  start: number;
+  end: number;
+  active: boolean;
+}
 
 export interface SpectralWaveform {
   low: number[];
@@ -68,6 +79,12 @@ export interface DeckState {
   eq: Record<EqBand, number>;
   /** Filter knob: -1 low-pass … 0 off … +1 high-pass. */
   filter: number;
+  /** Manual loop; null without one. */
+  loop: LoopState | null;
+  /** Post-fader effect. */
+  fx: FxSettings;
+  /** Gain knob: dB on top of the automatic loudness trim. */
+  trimDb: number;
 }
 
 export type PlaybackMode = 'rate' | 'stretch';

@@ -6,7 +6,8 @@ import { BEATS_PER_BAR, ctxTimeAt, type PlayheadAnchor, trackTimeAt } from './tr
  * - tempo: match the tempo only (the rate), the phase is left alone.
  * - beat: also land on the master's beats.
  * - bar: beats and the bar line (downbeat on downbeat).
- * - phrase: bars, and the same distance into the phrase, so drops line up.
+ * - phrase: bars, and the phrases change together: the same number of bars to go until the
+ *   next phrase, so a drop lands with a drop.
  */
 export type SyncMode = 'tempo' | 'beat' | 'bar' | 'phrase';
 
@@ -42,66 +43,83 @@ export function nearestPhaseDelta(delta: number, unit: number): number {
   return d;
 }
 
-/** Bar where the phrase containing `bar` starts (a regular grid without analysed phrases). */
-export function phraseStartBar(bar: number, phrases: Phrase[] | undefined): number {
-  const starts = phraseStarts(phrases);
-  if (starts.length === 0) return Math.floor(bar / DEFAULT_PHRASE_BARS) * DEFAULT_PHRASE_BARS;
-  let start = starts[0];
-  for (const s of starts) if (s <= bar) start = s;
-  if (bar < starts[0]) return Math.floor(bar / DEFAULT_PHRASE_BARS) * DEFAULT_PHRASE_BARS;
-  const last = phrases![phrases!.length - 1];
-  const end = last.startBar + last.bars;
-  if (bar >= end) return end + Math.floor((bar - end) / DEFAULT_PHRASE_BARS) * DEFAULT_PHRASE_BARS;
-  return start;
+interface PhraseSpan {
+  start: number;
+  bars: number;
 }
 
-function phraseStarts(phrases: Phrase[] | undefined): number[] {
+/**
+ * The phrase containing `bar`: an analysed one, or a cell of the regular grid before, after
+ * and without the analysed phrases.
+ */
+export function phraseAt(bar: number, phrases: Phrase[] | undefined): PhraseSpan {
+  const spans = phraseSpans(phrases);
+  for (const span of spans) {
+    if (bar >= span.start && bar < span.start + span.bars) return span;
+  }
+  const origin = spans.length === 0 ? 0 : bar < spans[0].start ? 0 : spans[spans.length - 1].start + spans[spans.length - 1].bars;
+  const start = origin + Math.floor((bar - origin) / DEFAULT_PHRASE_BARS) * DEFAULT_PHRASE_BARS;
+  return { start, bars: DEFAULT_PHRASE_BARS };
+}
+
+/** Bar where the phrase containing `bar` starts. */
+export function phraseStartBar(bar: number, phrases: Phrase[] | undefined): number {
+  return phraseAt(bar, phrases).start;
+}
+
+function phraseSpans(phrases: Phrase[] | undefined): PhraseSpan[] {
   if (!phrases || phrases.length === 0) return [];
-  return [...phrases].map((p) => p.startBar).sort((a, b) => a - b);
+  return [...phrases].map((p) => ({ start: p.startBar, bars: p.bars })).sort((a, b) => a.start - b.start);
 }
 
 /**
  * The follower's track time that, at audio-clock time `at`, puts it in phase with the master
- * under `mode`, moving it by the shortest distance. 'tempo' leaves it where it is.
+ * under `mode`, moving it by the shortest distance. 'tempo' leaves it where it is. A position
+ * before the track's start (a follower parked at 0) moves forward to the next one in phase.
  */
 export function phaseSyncTarget(mode: SyncMode, master: SyncMaster, follower: SyncFollower, at: number): number {
   if (mode === 'tempo') return follower.trackTime;
   const masterBeat = master.clock.beatAt(trackTimeAt(master.anchor, at));
   const followerBeat = follower.clock.beatAt(follower.trackTime);
 
+  let targetBeat: number;
+  let unit: number;
   if (mode === 'phrase') {
     const masterBar = masterBeat / BEATS_PER_BAR;
-    const offset = masterBar - phraseStartBar(masterBar, master.phrases);
+    const masterPhrase = phraseAt(masterBar, master.phrases);
     const followerBar = followerBeat / BEATS_PER_BAR;
-    const targetBar = nearestPhrasePosition(followerBar, offset, follower.phrases);
-    return follower.clock.timeOf(targetBar * BEATS_PER_BAR);
+    targetBeat = nearestPhrasePosition(followerBar, masterBar - masterPhrase.start, masterPhrase.start + masterPhrase.bars - masterBar, follower.phrases) * BEATS_PER_BAR;
+    unit = DEFAULT_PHRASE_BARS * BEATS_PER_BAR;
+  } else {
+    unit = mode === 'bar' ? BEATS_PER_BAR : 1;
+    targetBeat = followerBeat + nearestPhaseDelta(masterBeat - followerBeat, unit);
   }
-
-  const unit = mode === 'bar' ? BEATS_PER_BAR : 1;
-  const delta = nearestPhaseDelta(masterBeat - followerBeat, unit);
-  return follower.clock.timeOf(followerBeat + delta);
+  let guard = 0;
+  while (follower.clock.timeOf(targetBeat) < 0 && guard++ < 1024) targetBeat += unit;
+  return follower.clock.timeOf(targetBeat);
 }
 
-/** The bar `offset` bars into whichever of the follower's phrases lies nearest `bar`. */
-function nearestPhrasePosition(bar: number, offset: number, phrases: Phrase[] | undefined): number {
-  const starts = phraseStarts(phrases);
-  if (starts.length === 0) {
-    const base = Math.round((bar - offset) / DEFAULT_PHRASE_BARS) * DEFAULT_PHRASE_BARS;
-    return base + offset;
+/**
+ * The position nearest `bar` in one of the follower's phrases with `remaining` bars to go to
+ * its end (the phrases then change together). When no phrase is that long, the position
+ * `offset` bars into the nearest phrase instead.
+ */
+function nearestPhrasePosition(bar: number, offset: number, remaining: number, phrases: Phrase[] | undefined): number {
+  const spans = phraseSpans(phrases);
+  // The regular grid runs before and after the analysed phrases, so every position can sync.
+  const candidates: PhraseSpan[] = [...spans];
+  const reach = DEFAULT_PHRASE_BARS * 2 + Math.max(offset, remaining);
+  const after = spans.length === 0 ? 0 : spans[spans.length - 1].start + spans[spans.length - 1].bars;
+  for (let s = after; s <= bar + reach; s += DEFAULT_PHRASE_BARS) candidates.push({ start: s, bars: DEFAULT_PHRASE_BARS });
+  const before = spans.length === 0 ? 0 : spans[0].start;
+  for (let s = before - DEFAULT_PHRASE_BARS; s >= bar - reach; s -= DEFAULT_PHRASE_BARS) {
+    candidates.push({ start: s, bars: DEFAULT_PHRASE_BARS });
   }
-  const last = phrases![phrases!.length - 1];
-  const end = last.startBar + last.bars;
-  // Keep a regular grid running past the analysed phrases, so late positions still sync.
-  const candidates = [...starts];
-  for (let s = end; s <= bar + DEFAULT_PHRASE_BARS; s += DEFAULT_PHRASE_BARS) candidates.push(s);
-  for (let s = starts[0] - DEFAULT_PHRASE_BARS; s >= bar - offset - DEFAULT_PHRASE_BARS; s -= DEFAULT_PHRASE_BARS) {
-    candidates.push(s);
-  }
-  let best = candidates[0];
-  for (const s of candidates) {
-    if (Math.abs(s + offset - bar) < Math.abs(best + offset - bar)) best = s;
-  }
-  return best + offset;
+  const nearest = (positions: number[]): number =>
+    positions.reduce((best, p) => (Math.abs(p - bar) < Math.abs(best - bar) ? p : best));
+  const endAligned = candidates.filter((c) => c.bars >= remaining).map((c) => c.start + c.bars - remaining);
+  if (endAligned.length > 0) return nearest(endAligned);
+  return nearest(candidates.map((c) => c.start + offset));
 }
 
 /** Beats per unit a follower starts on: a beat for beat sync, a bar line otherwise. */

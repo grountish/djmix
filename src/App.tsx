@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useApp, type TrackPatch } from '@/store/AppContext';
 import { dedupeTracks } from '@/store/library';
-import { Browser, Deck, Mixer } from '@/components';
+import { Browser, Deck, Mixer, Settings } from '@/components';
 import { NextMix } from '@/components/NextMix';
+import { SYNC_MODES } from '@/audio/engine/sync';
+import { loudnessTrimDb } from '@/audio/engine/curves';
 import type { MixMarks } from '@/components/Waveform';
 import { useAutoDj } from '@/store/useAutoDj';
 import {
@@ -20,7 +22,7 @@ import {
   isCurrentAnalysis,
   isElectronEnvironment,
 } from '@/audio';
-import type { Track, TrackAnalysis } from '@/types';
+import type { DeckState, SyncMode, Track, TrackAnalysis } from '@/types';
 import { keyFromTag } from '@/audio/analysis/key';
 import { effectiveAnalysis } from '@/audio/analysis/overrides';
 import '@/styles/index.css';
@@ -68,6 +70,7 @@ export function App() {
   );
 
   const [isLibraryReady, setIsLibraryReady] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
 
   const handleImport = useCallback(async () => {
     if (!isLibraryReady) return;
@@ -242,6 +245,23 @@ export function App() {
   const incomingTrack = next ? (next.incoming === 'A' ? state.deckA : state.deckB).track : null;
   const moved = !!next && !!state.automix.startBar && state.automix.startBar.trackId === next.outgoingTrackId;
 
+  const channelFor = (deck: DeckState) => ({
+    eq: deck.eq,
+    filter: deck.filter,
+    volume: deck.playback.volume,
+    trimDb: deck.trimDb,
+    autoTrimDb: loudnessTrimDb(deck.track?.analysis?.loudness.integratedLufs),
+    fx: deck.fx,
+  });
+  const loopHandlers = (deck: 'A' | 'B') => ({
+    onLoop: (beats: number) => actions.setDeckLoop(deck, beats),
+    onLoopIn: () => actions.loopIn(deck),
+    onLoopOut: () => actions.loopOut(deck),
+    onLoopHalve: () => actions.loopHalve(deck),
+    onLoopDouble: () => actions.loopDouble(deck),
+    onLoopToggle: () => actions.loopToggle(deck),
+  });
+
   const playingDeck = [state.deckA, state.deckB].find((d) => d.playback.isPlaying && d.track);
   const playingBpm = playingDeck?.track ? effectiveAnalysis(playingDeck.track)?.bpm : undefined;
   const masterBpm = playingBpm ? playingBpm * playingDeck!.playback.playbackRate : null;
@@ -255,6 +275,16 @@ export function App() {
           <span className="clock-value">{masterBpm ? masterBpm.toFixed(2) : '—'}</span>
           <span className="clock-label">BPM</span>
         </div>
+        <label className="topbar-sync" title="What SYNC lines up: the tempo only, or also the beat, the bar or the phrase">
+          <span>SYNC</span>
+          <select value={state.syncMode} onChange={(e) => actions.setSyncMode(e.target.value as SyncMode)}>
+            {SYNC_MODES.map(({ mode, label }) => (
+              <option key={mode} value={mode}>
+                {label}
+              </option>
+            ))}
+          </select>
+        </label>
         <NextMix
           next={next}
           status={state.automix.status}
@@ -269,6 +299,9 @@ export function App() {
         <span className="topbar-meta">
           {analysing > 0 ? `Analysing ${analysing} of ${state.tracks.length}` : `${state.tracks.length} tracks`}
         </span>
+        <button className="nextmix-btn" onClick={() => setShowSettings(true)} title="Audio output, sample rate and buffer">
+          AUDIO
+        </button>
       </header>
 
       <main className="decks">
@@ -286,11 +319,13 @@ export function App() {
           onOverridesChange={actions.setTrackOverrides}
           onDropTrack={(id) => loadTrackId('A', id)}
           mixMarks={marksFor('A')}
+          syncMode={state.syncMode}
+          {...loopHandlers('A')}
         />
 
         <Mixer
-          channelA={{ eq: state.deckA.eq, filter: state.deckA.filter, volume: state.deckA.playback.volume }}
-          channelB={{ eq: state.deckB.eq, filter: state.deckB.filter, volume: state.deckB.playback.volume }}
+          channelA={channelFor(state.deckA)}
+          channelB={channelFor(state.deckB)}
           onEqChange={actions.setDeckEq}
           onFilterChange={actions.setDeckFilter}
           onVolumeChange={actions.setDeckVolume}
@@ -298,6 +333,10 @@ export function App() {
           onCrossfaderChange={actions.setCrossfader}
           masterVolume={state.masterVolume}
           onMasterVolumeChange={actions.setMasterVolume}
+          onTrimChange={actions.setDeckTrim}
+          onFxChange={actions.setDeckFx}
+          crossfaderCurve={state.crossfaderCurve}
+          onCrossfaderCurveChange={actions.setCrossfaderCurve}
           automixEnabled={state.automix.enabled}
           isTransitioning={state.automix.isTransitioning}
           canTriggerAutomix={!!state.deckA.track?.analysis && !!state.deckB.track?.analysis}
@@ -319,6 +358,8 @@ export function App() {
           onOverridesChange={actions.setTrackOverrides}
           onDropTrack={(id) => loadTrackId('B', id)}
           mixMarks={marksFor('B')}
+          syncMode={state.syncMode}
+          {...loopHandlers('B')}
         />
       </main>
 
@@ -357,6 +398,8 @@ export function App() {
           <span>Master {Math.round(state.masterVolume * 100)}%</span>
         </span>
       </footer>
+
+      {showSettings && <Settings onClose={() => setShowSettings(false)} />}
     </div>
   );
 }

@@ -44,7 +44,10 @@ export function setDeckFilter(deckId: DeckId, position: number): void {
   setFilter(getMixGraph(), deckId, position);
 }
 
-/** Trims the deck so the track plays near the target loudness; unknown loudness means 0 dB. */
-export function setDeckAutoGain(deckId: DeckId, integratedLufs: number | undefined): void {
-  setTrim(getMixGraph(), deckId, loudnessTrimDb(integratedLufs));
+/**
+ * Trims the deck so the track plays near the target loudness (unknown loudness: 0 dB), plus
+ * the gain knob's offset in dB.
+ */
+export function setDeckAutoGain(deckId: DeckId, integratedLufs: number | undefined, offsetDb = 0): void {
+  setTrim(getMixGraph(), deckId, loudnessTrimDb(integratedLufs) + offsetDb);
 }

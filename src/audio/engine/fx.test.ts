@@ -29,12 +29,14 @@ function rms(out: Float32Array, from: number, to: number): number {
 }
 
 const around = (out: Float32Array, t: number) => rms(out, t - 0.02, t + 0.02);
+/** Residual the channel itself leaves after an impulse (the filters' slow tails), well under any repeat. */
+const SILENCE = 2e-4;
 
 describe('channel effects', () => {
   it('pass the dry signal untouched and add nothing while off', async () => {
     const out = await renderImpulse((graph) => getChannelFx(graph, 'A'));
     expect(around(out, IMPULSE_AT)).toBeGreaterThan(0.01);
-    expect(rms(out, IMPULSE_AT + 0.05, 2)).toBeLessThan(1e-5);
+    expect(rms(out, IMPULSE_AT + 0.05, 2)).toBeLessThan(SILENCE);
   });
 
   it('echo repeats on the beat and decays', async () => {
@@ -51,8 +53,8 @@ describe('channel effects', () => {
     expect(second).toBeLessThan(first);
     expect(third).toBeLessThan(second);
     // Silence between the repeats.
-    expect(rms(out, IMPULSE_AT + 0.1, IMPULSE_AT + 0.45)).toBeLessThan(1e-5);
-    expect(rms(out, IMPULSE_AT + 0.55, IMPULSE_AT + 0.95)).toBeLessThan(1e-5);
+    expect(rms(out, IMPULSE_AT + 0.1, IMPULSE_AT + 0.45)).toBeLessThan(SILENCE);
+    expect(rms(out, IMPULSE_AT + 0.55, IMPULSE_AT + 0.95)).toBeLessThan(SILENCE);
   });
 
   it('echo follows the deck tempo', async () => {
@@ -61,7 +63,7 @@ describe('channel effects', () => {
       setFx(fx, { type: 'echo', beats: 1, amount: 0.5 });
       setFxTempo(fx, 60); // one beat = 1 s
     });
-    expect(around(out, IMPULSE_AT + 0.5)).toBeLessThan(1e-5);
+    expect(around(out, IMPULSE_AT + 0.5)).toBeLessThan(SILENCE);
     expect(around(out, IMPULSE_AT + 1.0)).toBeGreaterThan(0.001);
   });
 

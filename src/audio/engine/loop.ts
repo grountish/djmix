@@ -61,10 +61,9 @@ export class LoopController {
     return this.clock.beatAt(this.region.end) - this.clock.beatAt(this.region.start);
   }
 
-  /** A new track: its grid (null when unknown), and no loop. */
+  /** The track's grid (null when unknown). A loop is kept: it is in seconds. */
   setClock(clock: BeatClock | null): void {
     this.clock = clock;
-    this.clear();
   }
 
   clear(): void {

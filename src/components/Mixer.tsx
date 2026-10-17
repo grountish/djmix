@@ -1,6 +1,8 @@
 import { useMemo } from 'react';
-import type { EqBand } from '@/types';
+import type { CrossfaderSettings, EqBand, FxSettings, FxType } from '@/types';
+import { CROSSFADER_CURVES } from '@/audio/engine/crossfaderCurve';
 import { filterKnobToCutoffs } from '@/audio/engine/curves';
+import { FX_BEATS, FX_TYPES } from '@/audio/engine/fx';
 import { getMeter, type MeterTarget } from '@/audio/engine/liveGraph';
 import { Knob } from './Knob';
 import { Meter } from './Meter';
@@ -11,9 +13,18 @@ export interface ChannelControls {
   eq: Record<EqBand, number>;
   filter: number;
   volume: number;
+  /** Gain knob, dB on top of the automatic trim. */
+  trimDb: number;
+  /** The automatic loudness trim in effect, dB (for the knob's tooltip). */
+  autoTrimDb: number;
+  fx: FxSettings;
 }
 
-const ROWS: { control: EqBand | 'filter'; label: string }[] = [
+/** Gain knob travel either side of 0 dB. */
+const TRIM_RANGE_DB = 12;
+
+const ROWS: { control: EqBand | 'filter' | 'gain'; label: string }[] = [
+  { control: 'gain', label: 'GAIN' },
   { control: 'high', label: 'HI' },
   { control: 'mid', label: 'MID' },
   { control: 'low', label: 'LOW' },
@@ -34,6 +45,26 @@ function filterTitle(knob: number): string {
   return knob < 0 ? `Low-pass ${Math.round(lowpassHz)} Hz` : `High-pass ${Math.round(highpassHz)} Hz`;
 }
 
+const signed = (db: number) => `${db >= 0 ? '+' : ''}${db.toFixed(1)} dB`;
+
+function gainTitle(trimDb: number, autoTrimDb: number): string {
+  return `Gain ${signed(trimDb)} (auto trim ${signed(autoTrimDb)}, total ${signed(trimDb + autoTrimDb)})`;
+}
+
+/** A beat count as a division: 0.25 → "1/4". */
+function formatBeats(beats: number): string {
+  if (beats >= 1) return String(beats);
+  const quarters = Math.round(beats * 4);
+  return quarters === 2 ? '1/2' : `${quarters}/4`;
+}
+
+const FX_TITLES: Record<FxType, string> = {
+  echo: 'Echo: repeats on the beat, post-fader (pull the fader down and the tail rings out)',
+  flanger: 'Flanger: a sweep every N beats',
+  phaser: 'Phaser: a sweep every N beats',
+  reverb: 'Reverb',
+};
+
 function meterFor(target: MeterTarget): AnalyserNode | null {
   try {
     return getMeter(target);
@@ -52,6 +83,10 @@ interface MixerProps {
   onCrossfaderChange: (value: number) => void;
   masterVolume: number;
   onMasterVolumeChange: (volume: number) => void;
+  onTrimChange: (deck: DeckId, trimDb: number) => void;
+  onFxChange: (deck: DeckId, fx: FxSettings) => void;
+  crossfaderCurve: CrossfaderSettings;
+  onCrossfaderCurveChange: (settings: CrossfaderSettings) => void;
   automixEnabled: boolean;
   isTransitioning: boolean;
   canTriggerAutomix: boolean;
@@ -69,6 +104,10 @@ export function Mixer({
   onCrossfaderChange,
   masterVolume,
   onMasterVolumeChange,
+  onTrimChange,
+  onFxChange,
+  crossfaderCurve,
+  onCrossfaderCurveChange,
   automixEnabled,
   isTransitioning,
   canTriggerAutomix,
@@ -78,8 +117,22 @@ export function Mixer({
   const meters = useMemo(() => ({ A: meterFor('A'), B: meterFor('B'), master: meterFor('master') }), []);
   const channels: Record<DeckId, ChannelControls> = { A: channelA, B: channelB };
 
-  const knob = (deck: DeckId, control: EqBand | 'filter', label: string) => {
+  const knob = (deck: DeckId, control: EqBand | 'filter' | 'gain', label: string) => {
     const channel = channels[deck];
+    if (control === 'gain') {
+      return (
+        <Knob
+          value={channel.trimDb}
+          min={-TRIM_RANGE_DB}
+          max={TRIM_RANGE_DB}
+          centre={0}
+          label=""
+          title={`${gainTitle(channel.trimDb, channel.autoTrimDb)} (double-click to reset)`}
+          color={DECK_COLOR[deck]}
+          onChange={(value) => onTrimChange(deck, value)}
+        />
+      );
+    }
     if (control === 'filter') {
       return (
         <Knob
@@ -103,6 +156,60 @@ export function Mixer({
     );
   };
 
+  const fxSelect = (deck: DeckId) => {
+    const { fx } = channels[deck];
+    return (
+      <select
+        className={`mixer-select ${fx.type ? 'on' : ''}`}
+        value={fx.type ?? 'off'}
+        title={fx.type ? FX_TITLES[fx.type] : 'Channel effect (post-fader)'}
+        onChange={(e) => onFxChange(deck, { ...fx, type: e.target.value === 'off' ? null : (e.target.value as FxType) })}>
+        <option value="off">OFF</option>
+        {FX_TYPES.map(({ type, label }) => (
+          <option key={type} value={type}>
+            {label.toUpperCase()}
+          </option>
+        ))}
+      </select>
+    );
+  };
+
+  const beatsSelect = (deck: DeckId) => {
+    const { fx } = channels[deck];
+    const synced = !!fx.type && FX_TYPES.find((t) => t.type === fx.type)?.beatSynced;
+    return (
+      <select
+        className="mixer-select"
+        value={fx.beats}
+        disabled={!synced}
+        title={fx.type === 'echo' ? 'Echo time in beats' : 'Beats per sweep'}
+        onChange={(e) => onFxChange(deck, { ...fx, beats: Number(e.target.value) })}>
+        {FX_BEATS.map((beats) => (
+          <option key={beats} value={beats}>
+            {formatBeats(beats)}
+          </option>
+        ))}
+      </select>
+    );
+  };
+
+  const amountKnob = (deck: DeckId) => {
+    const { fx } = channels[deck];
+    return (
+      <Knob
+        value={fx.amount}
+        min={0}
+        max={1}
+        centre={0}
+        label=""
+        title={`Effect amount ${Math.round(fx.amount * 100)}%`}
+        color={DECK_COLOR[deck]}
+        disabled={!fx.type}
+        onChange={(value) => onFxChange(deck, { ...fx, amount: value })}
+      />
+    );
+  };
+
   return (
     <div className="mixer">
       <div className="mixer-knobs">
@@ -113,6 +220,24 @@ export function Mixer({
             {knob('B', control, label)}
           </div>
         ))}
+      </div>
+
+      <div className="mixer-fx">
+        <div className="mixer-row">
+          {fxSelect('A')}
+          <span className="mixer-row-label">FX</span>
+          {fxSelect('B')}
+        </div>
+        <div className="mixer-row">
+          {beatsSelect('A')}
+          <span className="mixer-row-label">BEAT</span>
+          {beatsSelect('B')}
+        </div>
+        <div className="mixer-row">
+          {amountKnob('A')}
+          <span className="mixer-row-label">AMT</span>
+          {amountKnob('B')}
+        </div>
       </div>
 
       <div className="mixer-faders">
@@ -152,6 +277,29 @@ export function Mixer({
           onDoubleClick={() => onCrossfaderChange(0)}
         />
         <span className="xf-label xf-b">B</span>
+      </div>
+      <div className="xf-curve">
+        {CROSSFADER_CURVES.map(({ curve, label }) => (
+          <button
+            key={curve}
+            className={`xf-btn ${crossfaderCurve.curve === curve ? 'active' : ''}`}
+            onClick={() => onCrossfaderCurveChange({ ...crossfaderCurve, curve })}
+            title={
+              curve === 'smooth'
+                ? 'Smooth: both decks full in the centre, a gentle fade to either side (blends)'
+                : curve === 'sharp'
+                  ? 'Sharp: the far deck stays full until the last stretch of travel (cuts, scratching)'
+                  : 'Linear: a straight fade from the centre'
+            }>
+            {label.toUpperCase()}
+          </button>
+        ))}
+        <button
+          className={`xf-btn ${crossfaderCurve.reverse ? 'active' : ''}`}
+          onClick={() => onCrossfaderCurveChange({ ...crossfaderCurve, reverse: !crossfaderCurve.reverse })}
+          title="Reverse (hamster): left is deck B, right is deck A">
+          REV
+        </button>
       </div>
 
       <div className="mixer-auto">
