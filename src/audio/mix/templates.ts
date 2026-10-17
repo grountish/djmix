@@ -120,6 +120,8 @@ export function laneValueAt(lane: Lane, bar: number): number {
 }
 
 const KILL_FLOOR_DB = -60;
+/** Gains below this (−240 dB) are numerical residue of a kill. */
+const KILL_GAIN = 1e-12;
 
 export function interpolate(lane: Pick<Lane, 'control' | 'shape'>, from: number, to: number, t: number): number {
   const isEq = lane.control === 'low' || lane.control === 'mid' || lane.control === 'high';
@@ -128,7 +130,8 @@ export function interpolate(lane: Pick<Lane, 'control' | 'shape'>, from: number,
     const [a, b] = isEq ? [eqDbToGain(from), eqDbToGain(to)] : [from, to];
     const value = lane.shape === 'rise' ? a + (b - a) * Math.sin((t * Math.PI) / 2) : b + (a - b) * Math.cos((t * Math.PI) / 2);
     if (!isEq) return value;
-    return value > 0 ? 20 * Math.log10(value) : KILL;
+    // cos(π/2) is 6e-17, not 0: a gain that small is the kill it was meant to be.
+    return value > KILL_GAIN ? 20 * Math.log10(value) : KILL;
   }
   if (!isEq) return from + (to - from) * t;
   if (t <= 0) return from;

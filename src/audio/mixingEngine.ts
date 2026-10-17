@@ -1,4 +1,4 @@
-import { clamp } from './engine/curves';
+import { clamp, loudnessTrimDb } from './engine/curves';
 import { getMixGraph } from './engine/liveGraph';
 import {
   type DeckId,
@@ -10,11 +10,6 @@ import {
   setParamSmooth,
   setTrim,
 } from './engine/mixGraph';
-
-/** Loudness every track is trimmed towards; the master limiter catches what's left. */
-const TARGET_LUFS = -11;
-const MAX_TRIM_CUT_DB = -12;
-const MAX_TRIM_BOOST_DB = 6;
 
 /** -1 = full A, 0 = centre, 1 = full B (equal-power law). */
 export function setCrossfader(value: number): void {
@@ -51,9 +46,5 @@ export function setDeckFilter(deckId: DeckId, position: number): void {
 
 /** Trims the deck so the track plays near the target loudness; unknown loudness means 0 dB. */
 export function setDeckAutoGain(deckId: DeckId, integratedLufs: number | undefined): void {
-  const trimDb =
-    integratedLufs === undefined || !Number.isFinite(integratedLufs)
-      ? 0
-      : clamp(TARGET_LUFS - integratedLufs, MAX_TRIM_CUT_DB, MAX_TRIM_BOOST_DB);
-  setTrim(getMixGraph(), deckId, trimDb);
+  setTrim(getMixGraph(), deckId, loudnessTrimDb(integratedLufs));
 }

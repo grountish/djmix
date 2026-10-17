@@ -2,7 +2,7 @@
  * Renders an automix transition between two audio files offline, writes it to a WAV and
  * prints how tight it was.
  *
- *   npm run mixlab -- <outgoing> <incoming> [--out mix.wav]
+ *   npm run mixlab -- <outgoing> <incoming> [--out mix.wav] [--no-balance] [--json report.json]
  */
 import { readFileSync, writeFileSync } from 'fs';
 import { basename } from 'path';
@@ -11,6 +11,7 @@ import * as webAudio from 'node-web-audio-api';
 import { analyzeAudio } from '../src/audio/analysis/analyzeAudio';
 import { keyFromTag } from '../src/audio/analysis/key';
 import type { AudioAnalysis } from '../src/audio/analysis/types';
+import { loudnessTrimDb } from '../src/audio/engine/curves';
 import { attachLimiter } from '../src/audio/engine/limiter';
 import { createOfflineMix } from '../src/audio/engine/offlineMix';
 import { createStretchNode } from '../src/audio/engine/stretch';
@@ -26,7 +27,6 @@ const SAMPLE_RATE = 44100;
 /** Bars of the outgoing track played before its tempo ramp starts. */
 const RUN_IN_BARS = 8;
 const TAIL_SECONDS = 8;
-const TARGET_LUFS = -11;
 
 async function load(file: string): Promise<{ buffer: AudioBuffer; analysis: AudioAnalysis }> {
   const data = readFileSync(file);
@@ -63,12 +63,28 @@ function writeWav(path: string, channels: Float32Array[], sampleRate: number): v
   writeFileSync(path, data);
 }
 
+/** Command line: positional files plus `--flag value` options and bare `--switch` flags. */
+function parseArgs(argv: string[], valued: string[], switches: string[]): { files: string[]; options: Map<string, string | true> } {
+  const files: string[] = [];
+  const options = new Map<string, string | true>();
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (valued.includes(arg)) options.set(arg, argv[++i]);
+    else if (switches.includes(arg)) options.set(arg, true);
+    else files.push(arg);
+  }
+  return { files, options };
+}
+
 async function main(): Promise<void> {
-  const args = process.argv.slice(2);
-  const outIndex = args.indexOf('--out');
-  const outPath = outIndex >= 0 ? args[outIndex + 1] : 'mixlab.wav';
-  const [outgoingFile, incomingFile] = args.filter((_, i) => outIndex < 0 || (i !== outIndex && i !== outIndex + 1));
-  if (!outgoingFile || !incomingFile) throw new Error('Usage: mixlab <outgoing> <incoming> [--out mix.wav]');
+  const { files, options } = parseArgs(process.argv.slice(2), ['--out', '--json'], ['--no-balance']);
+  const outPath = (options.get('--out') as string | undefined) ?? 'mixlab.wav';
+  const jsonPath = options.get('--json') as string | undefined;
+  const policy = { balance: !options.has('--no-balance') };
+  const [outgoingFile, incomingFile] = files;
+  if (!outgoingFile || !incomingFile) {
+    throw new Error('Usage: mixlab <outgoing> <incoming> [--out mix.wav] [--no-balance] [--json report.json]');
+  }
 
   const outgoing = await load(outgoingFile);
   const incoming = await load(incomingFile);
@@ -78,11 +94,13 @@ async function main(): Promise<void> {
   const draft = planTransition({
     outgoing: { analysis: outgoing.analysis, trackTime: 0, rate: 1, semitones: 0 },
     incoming: { analysis: incoming.analysis },
+    policy,
   });
   const startTrackTime = Math.max(0, clockOut.timeOf((draft.outgoingRampStartBar - RUN_IN_BARS) * 4));
   const plan = planTransition({
     outgoing: { analysis: outgoing.analysis, trackTime: startTrackTime, rate: 1, semitones: 0 },
     incoming: { analysis: incoming.analysis },
+    policy,
   });
   console.log(describePlan(plan));
 
@@ -109,8 +127,7 @@ async function main(): Promise<void> {
   await mix.decks.B.load(incoming.buffer);
   // Same loudness trim the app applies on load.
   for (const [id, track] of [['A', outgoing], ['B', incoming]] as const) {
-    const trimDb = Math.max(-12, Math.min(6, TARGET_LUFS - track.analysis.loudness.integratedLufs));
-    mix.graph.decks[id].input.gain.value = Math.pow(10, trimDb / 20);
+    mix.graph.decks[id].input.gain.value = Math.pow(10, loudnessTrimDb(track.analysis.loudness.integratedLufs) / 20);
   }
   mix.decks.A.setKeyLock(true);
   mix.decks.A.seek(startTrackTime);
@@ -162,6 +179,19 @@ async function main(): Promise<void> {
       console.log('short-term LUFS around the overlap (s from start):', curve.join(' '));
     }
     report.loudnessDeviationLu = +metrics.loudnessDeviationLu.toFixed(2);
+    if (plan.balance) {
+      report.balance = {
+        templateExcessDb: plan.balance.templateExcessDb,
+        balancedExcessDb: plan.balance.balancedExcessDb,
+      };
+      if (process.env.MIXLAB_DEBUG) {
+        for (const band of ['low', 'mid', 'high'] as const) {
+          const { reference, template, balanced } = plan.balance.bands[band];
+          const row = (values: number[]) => values.map((v) => (Number.isFinite(v) ? v.toFixed(0).padStart(4) : '   -')).join('');
+          console.log(`${band.padEnd(5)} ref ${row(reference)}\n      tpl ${row(template)}\n      bal ${row(balanced)}`);
+        }
+      }
+    }
     report.checks = metrics.checks;
     report.pass = metrics.pass;
   }
@@ -171,6 +201,7 @@ async function main(): Promise<void> {
   report.outgoing = basename(outgoingFile);
   report.incoming = basename(incomingFile);
   console.log(JSON.stringify(report, null, 2));
+  if (jsonPath) writeFileSync(jsonPath, JSON.stringify({ ...report, plan }, null, 2));
 }
 
 main().catch((error) => {

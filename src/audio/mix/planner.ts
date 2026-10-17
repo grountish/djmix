@@ -1,5 +1,6 @@
 import { toCamelot, type MusicalKey } from '../analysis/key';
 import type { AudioAnalysis, TrackKey } from '../analysis/types';
+import { balancePlan, type BalanceReport } from './balance';
 import { bestKeyShift, harmonicScore, MIN_KEY_SHIFT_CONFIDENCE, transpose } from './harmonic';
 import { chooseMixPoints, type MixTiming, type OutgoingLoop } from './mixPoints';
 import { DEFAULT_TEMPO_POLICY, planTempo, type TempoPlan, type TempoPolicy } from './tempoPlan';
@@ -13,6 +14,8 @@ export interface PlanPolicy {
   allowKeyShift: boolean;
   /** Detected keys below this confidence are not trusted for shifting (tags count as 1). */
   minKeyConfidence: number;
+  /** Balance the blend's EQ lanes on the two tracks' band energies (see `balance.ts`). */
+  balance: boolean;
 }
 
 export const DEFAULT_PLAN_POLICY: PlanPolicy = {
@@ -21,6 +24,7 @@ export const DEFAULT_PLAN_POLICY: PlanPolicy = {
   // Keys are shown and warned about, but never change how a blend is played.
   allowKeyShift: false,
   minKeyConfidence: MIN_KEY_SHIFT_CONFIDENCE,
+  balance: true,
 };
 
 /** Compatibility below this is reported as a clash. */
@@ -68,6 +72,8 @@ export interface TransitionPlan {
   incomingSemitones: number;
   harmonic: { score: number; outgoingKey: string; incomingKey: string };
   lanes: Lane[];
+  /** Forecast of the blend's band levels, when the lanes were balanced on them. */
+  balance?: BalanceReport;
   warnings: string[];
 }
 
@@ -105,7 +111,7 @@ export function planTransition(input: PlanInput): TransitionPlan {
     if (analysis.downbeatConfidence < 0.2) warnings.push(`${name} track's downbeat is uncertain`);
   }
 
-  return {
+  const plan: TransitionPlan = {
     kind: blend ? 'blend' : 'cut',
     tempo: blend ? tempo : { ...tempo, incomingRate: 1, incomingRampBars: 0, outgoingRate: input.outgoing.rate, outgoingRampBars: 0 },
     overlapBars: blend ? points.overlapBars : 0,
@@ -119,6 +125,7 @@ export function planTransition(input: PlanInput): TransitionPlan {
     lanes: blend ? blendTemplate(points.overlapBars, points.bassSwapBar) : cutTemplate(),
     warnings,
   };
+  return policy.balance ? balancePlan(plan, out, inc) : plan;
 }
 
 /** ±1 semitone on the incoming track when it turns a clash into a match and both keys are trusted. */

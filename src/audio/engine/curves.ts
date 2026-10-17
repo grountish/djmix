@@ -2,6 +2,21 @@ export function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
 
+/** Loudness every track is trimmed towards; the master limiter catches what's left. */
+export const TARGET_LUFS = -11;
+const MAX_TRIM_CUT_DB = -12;
+const MAX_TRIM_BOOST_DB = 6;
+
+/**
+ * Trim (dB) that brings a track of `integratedLufs` to the target, within the trim's range.
+ * Unknown loudness means 0 dB. The app, the planner's level forecast and the offline
+ * renders all use this one law, so a predicted level is the level that plays.
+ */
+export function loudnessTrimDb(integratedLufs: number | undefined): number {
+  if (integratedLufs === undefined || !Number.isFinite(integratedLufs)) return 0;
+  return clamp(TARGET_LUFS - integratedLufs, MAX_TRIM_CUT_DB, MAX_TRIM_BOOST_DB);
+}
+
 /**
  * Crossfader law: -1 = full A, 0 = centre, 1 = full B. Both decks play at full level in the
  * centre (automix blends with the channel faders and EQ there); towards a side the other deck
