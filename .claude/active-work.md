@@ -25,21 +25,21 @@ Started 2026-10-17 23:20. Order: 1 → 4 → 5. Stays out of every file listed a
 IN PROGRESS / NEXT; the two hooks into shared files are marked ⏳ and go in only once the other
 entry is DONE (or as a one-line additive edit, announced here first).
 
-1. IN PROGRESS Energy-aware EQ balance: the planner predicts both decks' per-band level through
-   the overlap (analysed bar energies + trim + template gains) and corrects the EQ lanes so each
-   band's sum follows a reference (outgoing level → incoming level). Replaces the fixed template.
-   New `src/audio/mix/balance.ts` (+ `balance.test.ts`); `src/audio/engine/curves.ts`
-   (`loudnessTrimDb`, shared trim law); `src/audio/mixingEngine.ts` (uses it);
-   `scripts/mixlab.ts` (`--no-balance`, predicted vs measured bands).
-   ⏳ `src/audio/mix/planner.ts`: one call `balanceLanes(...)` where `lanes` is built, plus a
-   `balance` policy flag — after entry 3 above is DONE.
-2. NEXT Independent mix metrics + batch: grid-free double-kick detector and low-envelope
-   cross-correlation on rendered overlaps (`src/audio/mix/metrics.ts` + test); `scripts/mixset.ts`
-   (renders every adjacent pair of a folder/playlist, writes a markdown/JSON table); master
-   ring-buffer recorder for a "bad mix" dump (`src/audio/engine/recorder.ts`, new;
-   `electron/main.js` + `preload.js`: `report:save` IPC).
-   ⏳ The "bad mix" button itself needs a spot in the status bar / mixer: will ask here before
-   touching `Mixer.tsx` / `AppContext.tsx`.
+1. DONE `5a28ef6` Energy-aware EQ balance (`src/audio/mix/balance.ts` + test, `loudnessTrimDb`
+   in `curves.ts`, `mixingEngine.ts` uses it, planner `balance` policy flag + `plan.balance`,
+   mixlab `--no-balance` / `--json`). `curves.ts` / `mixingEngine.ts` / `planner.ts` are free
+   (cae530b9 entry 3 can go). Tuning from the real-pair A/B renders, if any, lands in
+   `balance.ts` only.
+2. IN PROGRESS Independent mix metrics + batch: grid-free double-kick detector and low-envelope
+   cross-correlation on rendered overlaps, forecast-vs-measured band levels
+   (`src/audio/mix/metrics.ts` + test); mixlab's render split into `scripts/mixlabLib.ts`;
+   new `scripts/mixset.ts` (renders every adjacent pair of a folder/playlist, writes a
+   markdown/JSON table); master ring-buffer recorder for a "bad mix" dump
+   (`src/audio/engine/recorder.ts`, new; `electron/main.js` + `preload.js`: `report:save` IPC;
+   `src/types/index.ts`: the IPC's type). The button is a self-contained
+   `src/components/BadMixButton.tsx`; it is mounted with ONE line in the `App.tsx` footer
+   (a131b68b's lock is released, cae530b9 entry 2 hasn't started) — cae530b9: if you'd rather
+   place it yourself in `Mixer.tsx`, move that one line, nothing else in App.tsx is mine.
 3. NEXT Structure accuracy: `src/audio/analysis/structure.ts` (section boundaries from
    self-similarity novelty, drop detection), `tempo.ts` / `analyzeAudio.ts` (tag-BPM octave
    hint as an optional argument; the one-line call-site change in `AppContext.tsx` ⏳),
