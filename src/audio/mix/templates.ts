@@ -22,29 +22,22 @@ const BASS_SWAP_BARS = 1 / 8;
 const OUTRO_HIGHPASS = 0.55;
 
 /**
- * EQ blend around the bass swap. Incoming highs and mids are eased in first; the basslines
- * swap in half a beat right before the swap downbeat, so exactly one deck owns the low end
- * at any time; then the outgoing mids and highs give way and its remainder is filtered and
- * faded out over most of what is left. On a key clash the incoming mids stay out until the
- * swap.
+ * EQ blend around the bass swap. The incoming track fades in over the bars before the swap
+ * with its highs and mids eased in; the basslines swap in half a beat right before the swap
+ * downbeat, so exactly one deck owns the low end at any time; then the outgoing mids and
+ * highs give way and its remainder is filtered and faded out over most of what is left.
  */
-export function blendTemplate(overlapBars: number, bassSwapBar: number, keyClash: boolean): Lane[] {
+export function blendTemplate(overlapBars: number, bassSwapBar: number): Lane[] {
   const length = overlapBars;
   const swap = bassSwapBar;
   const after = length - swap;
-  const fadeIn = Math.min(length / 4, swap / 2);
-  const incomingMid = keyClash
-    ? [
-        { bar: 0, value: KILL },
-        { bar: swap - BASS_SWAP_BARS, value: KILL },
-        { bar: swap + after / 2, value: 0 },
-      ]
-    : [
-        { bar: 0, value: -9 },
-        { bar: swap / 2, value: -9 },
-        { bar: swap, value: -4 },
-        { bar: swap + after / 4, value: 0 },
-      ];
+  const fadeIn = Math.min(length / 4, swap);
+  const incomingMid = [
+    { bar: 0, value: -9 },
+    { bar: swap / 2, value: -9 },
+    { bar: swap, value: -4 },
+    { bar: swap + after / 4, value: 0 },
+  ];
 
   return [
     { target: 'incoming', control: 'fader', shape: 'rise', points: [{ bar: 0, value: 0 }, { bar: fadeIn, value: 1 }] },

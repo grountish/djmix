@@ -27,7 +27,7 @@ export interface SequencerOptions {
 
 export const DEFAULT_SEQUENCER_OPTIONS: SequencerOptions = {
   direction: 'up',
-  allowKeyShift: true,
+  allowKeyShift: false,
   minKeyShiftConfidence: MIN_KEY_SHIFT_CONFIDENCE,
   tempoPolicy: DEFAULT_TEMPO_POLICY,
 };

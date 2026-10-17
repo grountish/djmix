@@ -18,11 +18,12 @@ export interface PlanPolicy {
 export const DEFAULT_PLAN_POLICY: PlanPolicy = {
   tempo: DEFAULT_TEMPO_POLICY,
   maxOverlapBars: 32,
-  allowKeyShift: true,
+  // Keys are shown and warned about, but never change how a blend is played.
+  allowKeyShift: false,
   minKeyConfidence: MIN_KEY_SHIFT_CONFIDENCE,
 };
 
-/** Compatibility below this is a clash: shorter overlap, incoming mids held back. */
+/** Compatibility below this is reported as a clash. */
 const KEY_CLASH_SCORE = 0.5;
 /** Bars of lead time on top of the tempo ramp, so everything can be scheduled ahead. */
 const SCHEDULING_LEAD_BARS = 1;
@@ -83,7 +84,7 @@ export function planTransition(input: PlanInput): TransitionPlan {
     outgoing: { phrases: out.phrases, barCount: out.bars.lowDb.length, currentBar },
     incoming: { phrases: inc.phrases, barCount: inc.bars.lowDb.length },
     leadBars: tempo.outgoingRampBars + SCHEDULING_LEAD_BARS,
-    maxOverlapBars: !tempo.canBlend ? 0 : keyClash ? 8 : policy.maxOverlapBars,
+    maxOverlapBars: tempo.canBlend ? policy.maxOverlapBars : 0,
     timing: input.timing,
   });
 
@@ -106,7 +107,7 @@ export function planTransition(input: PlanInput): TransitionPlan {
     bassSwapBar: points.bassSwapBar,
     incomingSemitones: shift,
     harmonic: { score, outgoingKey: toCamelot(outgoingKey), incomingKey: toCamelot(incomingKey) },
-    lanes: blend ? blendTemplate(points.overlapBars, points.bassSwapBar, keyClash) : cutTemplate(),
+    lanes: blend ? blendTemplate(points.overlapBars, points.bassSwapBar) : cutTemplate(),
     warnings,
   };
 }
