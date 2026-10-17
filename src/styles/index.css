@@ -1007,6 +1007,11 @@ select {
   background: transparent;
 }
 
+.browser-import:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .browser-main {
   display: flex;
   flex-direction: column;

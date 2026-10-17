@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useApp } from '@/store/AppContext';
+import { dedupeTracks } from '@/store/library';
 import { Browser, Deck, Mixer } from '@/components';
 import { useAutoDj } from '@/store/useAutoDj';
 import {
@@ -64,7 +65,10 @@ export function App() {
     [actions],
   );
 
+  const [isLibraryReady, setIsLibraryReady] = useState(false);
+
   const handleImport = useCallback(async () => {
+    if (!isLibraryReady) return;
     try {
       if (isElectronEnvironment()) {
         const filePaths = await importFiles();
@@ -92,7 +96,7 @@ export function App() {
     } catch (error) {
       console.error('Import failed:', error);
     }
-  }, [state.tracks, actions]);
+  }, [state.tracks, actions, isLibraryReady]);
 
   // Analyse pending tracks one at a time: each analysis holds a decoded track in memory.
   const analysisQueueRef = useRef<Promise<void>>(Promise.resolve());
@@ -111,7 +115,6 @@ export function App() {
 
   // Load saved library on startup
   const libraryLoadedRef = useRef(false);
-  const [isLibraryReady, setIsLibraryReady] = useState(false);
   const tracksCountAfterLoadRef = useRef(0);
 
   useEffect(() => {
@@ -127,6 +130,12 @@ export function App() {
           const stored = localStorage.getItem('djmix-library');
           if (stored) savedTracks = JSON.parse(stored);
         }
+        // Older builds appended re-imports; keep one entry per file, the richest copy.
+        const unique = dedupeTracks(savedTracks);
+        if (unique.length < savedTracks.length) {
+          console.log(`Library: dropped ${savedTracks.length - unique.length} duplicate entries`);
+        }
+        savedTracks = unique;
         if (savedTracks.length === 0) {
           setIsLibraryReady(true);
           return;
@@ -289,6 +298,7 @@ export function App() {
         referenceTrackId={state.referenceTrackId}
         direction={state.automix.direction}
         autoEnabled={state.automix.enabled}
+        canImport={isLibraryReady}
         onImport={handleImport}
         onSortChange={actions.setSort}
         onFilterChange={actions.setFilter}

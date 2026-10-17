@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useReducer, useCallback, useRef } from 'react';
 import type { AnalysisOverrides, Track, DeckState, EqBand, PlaybackMode, SortOption, FilterOptions } from '@/types';
 import { effectiveAnalysis } from '@/audio/analysis/overrides';
+import { mergeTracks } from './library';
 import {
   loadTrackToDeck,
   loadAudioBufferToDeck,
@@ -120,7 +121,7 @@ const initialState: AppState = {
 function reducer(state: AppState, action: Action): AppState {
   switch (action.type) {
     case 'ADD_TRACKS':
-      return { ...state, tracks: [...state.tracks, ...action.tracks] };
+      return { ...state, tracks: mergeTracks(state.tracks, action.tracks) };
 
     case 'UPDATE_TRACK':
       return {

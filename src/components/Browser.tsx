@@ -20,6 +20,7 @@ interface BrowserProps {
   referenceTrackId: string | null;
   direction: TempoDirection;
   autoEnabled: boolean;
+  canImport: boolean;
   onImport: () => void;
   onSortChange: (sort: SortOption) => void;
   onFilterChange: (filter: FilterOptions) => void;
@@ -97,6 +98,7 @@ export const Browser = memo(function Browser({
   referenceTrackId,
   direction,
   autoEnabled,
+  canImport,
   onImport,
   onSortChange,
   onFilterChange,
@@ -179,8 +181,12 @@ export const Browser = memo(function Browser({
             <span className="tree-count">{played.length}</span>
           </button>
         </nav>
-        <button className="browser-import" onClick={onImport}>
-          + Import tracks
+        <button
+          className="browser-import"
+          onClick={onImport}
+          disabled={!canImport}
+          title={canImport ? undefined : 'The library is still loading'}>
+          {canImport ? '+ Import tracks' : 'Loading library…'}
         </button>
       </aside>
 

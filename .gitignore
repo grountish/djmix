@@ -7,3 +7,6 @@ dist-electron/
 .env.local
 .claude/worktrees/
 mixlab-out/
+
+# RTK vitest JSON reports
+.vitest/
