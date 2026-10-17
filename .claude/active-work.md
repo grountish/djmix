@@ -47,26 +47,21 @@ entry is DONE (or as a one-line additive edit, announced here first).
 
 ## Session cae530b9 — pro mixer features: loops, trim knob, beat FX, crossfader curve, sync modes, device settings (main checkout)
 
-Started 2026-10-17. Engine halves first (new files + files nobody lists); the state/UI halves wait
-for the locks above. Entry 4 of a131b68b owns `AppContext.tsx` / `Deck.tsx` / `Waveform.tsx` /
-`App.tsx` / `index.css`; entry 1 of ecc91043 owns `curves.ts` / `mixingEngine.ts` (the
-`loudnessTrimDb` law this session's trim knob sits on top of). Nothing below touches those until
-the owning entry is DONE.
+Started 2026-10-17. Engine first, then the state/UI once the earlier locks cleared (they have).
 
-1. IN PROGRESS Engine, no UI. New: `src/audio/engine/loop.ts` (+ test: grid-quantised loop on a
-   `DeckPlayer` via `scheduleJump`, auto 1–32 bars, halve/double, exit), `src/audio/engine/fx.ts`
-   (+ test: post-fader beat-synced echo / flanger / reverb per channel, beats follow the deck
-   tempo), `src/audio/engine/crossfaderCurve.ts` (+ test: smooth / sharp / linear, reverse),
-   `src/audio/engine/sync.ts` (+ test: beat / bar / phrase phase sync as a jump + rate),
-   `src/audio/engine/outputDevice.ts` + `src/audio/audioSettings.ts` (output device via
-   `setSinkId`, sample rate, latency hint, persisted). Edits only in `src/audio/engine/mixGraph.ts`
-   (FX insert, curve argument with the current law as default), `src/audio/decoder.ts`
-   (`getAudioContext()` reads the settings), `src/audio/playbackEngine.ts` (loop controller and
-   phase sync per deck). New `src/components/Settings.tsx` and `src/components/FxPanel.tsx`
-   written but not mounted.
-2. WAITING on a131b68b entry 4 → state + UI: `AppContext.tsx` (loop / fx / crossfader curve /
-   sync mode / trim state and actions), `Deck.tsx` (loop buttons, sync mode), `Waveform.tsx`
-   (loop region), `App.tsx` (settings button), `index.css`, `Mixer.tsx` (FX row, curve switch,
-   gain knobs — ecc91043: a one-line "bad mix" button there is fine, say so here).
-3. WAITING on ecc91043 entry 1 → trim knob: manual dB offset on top of `loudnessTrimDb`, through
-   `setTrim`; the auto value shown in the knob's title. One call site in `mixingEngine.ts`.
+1. DONE `f7e1e70` Engine, no UI: `src/audio/engine/loop.ts` (LoopController: auto-loop on the
+   grid, in/out, halve/double, exit/reloop, wraps via `DeckPlayer.scheduleJump`), `fx.ts`
+   (post-fader echo / flanger / phaser / reverb, beats follow the deck tempo),
+   `crossfaderCurve.ts` (smooth / sharp / linear, reverse; the graph keeps the curve),
+   `sync.ts` (beat / bar / phrase phase sync), `outputDevice.ts` + `src/audio/audioSettings.ts`
+   (setSinkId, sample rate, latency hint, persisted); `mixGraph.ts` (FX insert, curve),
+   `decoder.ts` (context from the settings), `playbackEngine.ts` (`getDeckLoop`, `setDeckGrid`,
+   `syncDeckPhase`, `playDeckInSync`), `src/audio/fxEngine.ts`, `components/Settings.tsx` (unmounted).
+2. IN PROGRESS State + UI, touching: `src/types/index.ts` (DeckState: loop / fx / trimDb —
+   ecc91043: your IPC type in `ElectronAPI` is a different block, go ahead), `AppContext.tsx`
+   (loop / fx / trim / crossfader curve / sync mode actions), `Deck.tsx` (loop row),
+   `Waveform.tsx` (loop region), `Mixer.tsx` (gain row, FX rows, curve switch), `App.tsx`
+   (sync mode in the top bar, audio settings button + panel — ecc91043: your one BadMixButton
+   line in the footer stays as it is), `index.css`, new `src/store/mixerPrefs.ts`,
+   `mixingEngine.ts` (`setDeckAutoGain` takes the manual offset).
+3. (folded into 2) Trim knob: manual dB offset on top of `loudnessTrimDb`.
