@@ -16,6 +16,9 @@ import {
   trackTimeAt,
 } from './transport';
 
+/** Length of the fade that mutes a stopped stretcher: short enough to feel instant, no click. */
+const GATE_FADE = 0.005;
+
 /**
  * Plays an AudioBuffer into a persistent deck channel. The playhead is derived from anchors
  * on the audio clock, so it stays exact across rate changes and scheduled starts.
@@ -29,6 +32,8 @@ export class DeckPlayer {
   private source: AudioBufferSourceNode | null = null;
   private stretch: StretchNode | null = null;
   private stretchRunning = false;
+  /** Sits behind the stretcher: an immediate stop mutes it here, since parking it lands late. */
+  private gate: GainNode | null = null;
   /** Loads run one after another so two quick loads can't mix their audio. */
   private loading: Promise<void> = Promise.resolve();
   private stretchMessages: Promise<unknown> = Promise.resolve();
@@ -85,7 +90,9 @@ export class DeckPlayer {
 
       if (!this.stretch) {
         this.stretch = await this.createStretch(this.ctx);
-        this.stretch.connect(this.output);
+        this.gate = this.ctx.createGain();
+        this.stretch.connect(this.gate);
+        this.gate.connect(this.output);
       }
       await this.stretch.dropBuffers();
       const channels = [0, 1].map((c) =>
@@ -217,6 +224,7 @@ export class DeckPlayer {
       const at = Math.max(startAt, this.ctx.currentTime + STRETCH_LEAD);
       this.anchors = [{ ctxTime: at, trackTime: offset, rate: this.rate }];
       this.scheduleStretch({ at, input: offset, rate: this.rate });
+      this.openGate(at);
       this.stretchRunning = true;
       this.watchEnd();
       return;
@@ -240,6 +248,7 @@ export class DeckPlayer {
   private stopOutput(at?: number): void {
     this.clearEndTimer();
     if (this.stretchRunning && this.stretch) {
+      if (at === undefined) this.closeGate();
       this.parkStretch(at ?? this.ctx.currentTime);
       this.stretchRunning = false;
     }
@@ -262,6 +271,24 @@ export class DeckPlayer {
 
   private scheduleStretch({ at, input, rate }: { at: number; input: number; rate: number }): void {
     this.scheduleStretchAt(at, { active: true, input, rate, semitones: this.semitones });
+  }
+
+  /**
+   * A parking change sent for "now" only takes effect STRETCH_LEAD later: the stretcher has
+   * already rendered that far ahead. Without this an immediate stop keeps sounding for ~120 ms,
+   * which automix made audible by resetting the channel to neutral the moment it stopped a deck.
+   */
+  private closeGate(): void {
+    if (!this.gate) return;
+    const now = this.ctx.currentTime;
+    this.gate.gain.cancelScheduledValues(now);
+    this.gate.gain.setValueAtTime(this.gate.gain.value, now);
+    this.gate.gain.linearRampToValueAtTime(0, now + GATE_FADE);
+  }
+
+  /** Lets the stretcher through again from `at`, when a scheduled start begins to sound. */
+  private openGate(at: number): void {
+    this.gate?.gain.setValueAtTime(1, at);
   }
 
   /** Silences the stretcher from `at` (see PARKED_INPUT). */
@@ -292,7 +319,10 @@ export class DeckPlayer {
 
   private finish(): void {
     this.clearEndTimer();
-    if (this.stretchRunning) this.parkStretch(this.ctx.currentTime);
+    if (this.stretchRunning) {
+      this.closeGate();
+      this.parkStretch(this.ctx.currentTime);
+    }
     this.stretchRunning = false;
     this.playing = false;
     this.pausedAt = 0;
