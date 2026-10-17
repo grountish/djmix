@@ -67,6 +67,7 @@ type Action =
   | { type: 'SET_DECK_TARGET_BPM'; deck: 'A' | 'B'; targetBpm: number | null }
   | { type: 'SET_DECK_MODE'; deck: 'A' | 'B'; mode: PlaybackMode }
   | { type: 'SET_DECK_VOLUME'; deck: 'A' | 'B'; volume: number }
+  | { type: 'SET_DECK_CUE'; deck: 'A' | 'B'; cuePoint: number | null }
   | { type: 'SET_DECK_EQ'; deck: 'A' | 'B'; band: EqBand; value: number }
   | { type: 'SET_DECK_FILTER'; deck: 'A' | 'B'; value: number }
   | { type: 'SET_CROSSFADER'; value: number }
@@ -89,6 +90,7 @@ const createInitialDeckState = (): DeckState => ({
     playbackRate: 1,
     volume: 1,
   },
+  cuePoint: null,
   targetBpm: null,
   playbackMode: 'rate',
   eq: { low: 0, mid: 0, high: 0 },
@@ -97,7 +99,7 @@ const createInitialDeckState = (): DeckState => ({
 
 const initialState: AppState = {
   tracks: [],
-  sortOption: { field: 'fileName', direction: 'asc' },
+  sortOption: { field: 'title', direction: 'asc' },
   filterOptions: {},
   deckA: createInitialDeckState(),
   deckB: createInitialDeckState(),
@@ -159,6 +161,7 @@ function reducer(state: AppState, action: Action): AppState {
         [deckKey]: {
           ...state[deckKey],
           track: action.track,
+          cuePoint: null,
           playback: {
             ...state[deckKey].playback,
             currentTime: 0,
@@ -235,6 +238,11 @@ function reducer(state: AppState, action: Action): AppState {
       };
     }
 
+    case 'SET_DECK_CUE': {
+      const deckKey = action.deck === 'A' ? 'deckA' : 'deckB';
+      return { ...state, [deckKey]: { ...state[deckKey], cuePoint: action.cuePoint } };
+    }
+
     case 'SET_DECK_EQ': {
       const deckKey = action.deck === 'A' ? 'deckA' : 'deckB';
       return {
@@ -306,6 +314,10 @@ interface AppContextValue {
     setFilter: (filterOptions: FilterOptions) => void;
     loadToDeck: (deck: 'A' | 'B', track: Track) => Promise<void>;
     playPauseDeck: (deck: 'A' | 'B') => void;
+    /** CUE: playing → back to the cue point and pause; paused → set the cue point here. */
+    pressCue: (deck: 'A' | 'B') => void;
+    /** Parks a deck on a cue point (Auto cueing the next track); doesn't take over from automix. */
+    cueDeckAt: (deck: 'A' | 'B', time: number) => void;
     seekDeck: (deck: 'A' | 'B', time: number) => void;
     setDeckTargetBpm: (deck: 'A' | 'B', bpm: number | null) => void;
     setDeckMode: (deck: 'A' | 'B', mode: PlaybackMode) => void;
@@ -439,6 +451,28 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         dispatch({ type: 'SET_DECK_PLAYING', deck, isPlaying: true });
       }
     }, [releaseAutomix]),
+
+    pressCue: useCallback((deck: 'A' | 'B') => {
+      const deckState = deck === 'A' ? stateRef.current.deckA : stateRef.current.deckB;
+      if (!deckState.track) return;
+      if (isDeckEnginePlaying(deck)) {
+        releaseAutomix(`deck ${deck} cued`);
+        forceStopDeck(deck);
+        dispatch({ type: 'SET_DECK_PLAYING', deck, isPlaying: false });
+        const cue = deckState.cuePoint ?? 0;
+        seekDeck(deck, cue);
+        dispatch({ type: 'SET_DECK_TIME', deck, currentTime: cue });
+      } else {
+        dispatch({ type: 'SET_DECK_CUE', deck, cuePoint: deckState.playback.currentTime });
+      }
+    }, [releaseAutomix]),
+
+    cueDeckAt: useCallback((deck: 'A' | 'B', time: number) => {
+      if (isDeckEnginePlaying(deck)) return;
+      seekDeck(deck, time);
+      dispatch({ type: 'SET_DECK_TIME', deck, currentTime: time });
+      dispatch({ type: 'SET_DECK_CUE', deck, cuePoint: time });
+    }, []),
 
     seekDeck: useCallback((deck: 'A' | 'B', time: number) => {
       releaseAutomix(`deck ${deck} moved`);

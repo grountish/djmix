@@ -1,5 +1,6 @@
 export { Waveform, EmptyWaveform } from './Waveform';
-export { Deck } from './Deck';
+export { Deck, TRACK_DRAG_TYPE } from './Deck';
 export { Mixer } from './Mixer';
-export { TrackLibrary } from './TrackLibrary';
-export { QueuePanel } from './QueuePanel';
+export { Browser } from './Browser';
+export { Knob } from './Knob';
+export { Meter } from './Meter';

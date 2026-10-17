@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { effectiveAnalysis } from '@/audio/analysis/overrides';
 import { describePlan, previewTransition, secondsUntilPlan } from '@/audio/automixController';
 import { sequencerTrackFromAnalysis, suggestNext } from '@/audio/mix/sequencer';
+import { trackClock } from '@/audio/mix/trackClock';
 import type { DeckState, Track } from '@/types';
 import { useApp } from './AppContext';
 
@@ -97,6 +98,10 @@ export function useAutoDj(): void {
 
       const plan = previewTransition(decks.current.id, outgoing, incoming, 'end');
       if (!plan) return;
+      // Park the next track on its cue point, so the deck shows where it will come in.
+      const cueTime = trackClock(incoming).timeOf(plan.incomingStartBar * 4);
+      const cued = decks.idle.deck.cuePoint;
+      if (cued === null || Math.abs(cued - cueTime) > 0.01) actions.cueDeckAt(decks.idle.id, cueTime);
       const wait = secondsUntilPlan(decks.current.id, outgoing, plan);
       if (wait <= ARM_AHEAD_SECONDS) {
         armedFor.current = idleTrack.id;

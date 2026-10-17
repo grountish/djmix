@@ -1,4 +1,5 @@
-import React, { useState, useRef, useCallback, useEffect } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import type { BeatClock } from '@/audio/analysis/beatClock';
 import type { Phrase, PhraseLabel, SpectralWaveform } from '@/types';
 
 interface WaveformProps {
@@ -7,8 +8,10 @@ interface WaveformProps {
   currentTime: number;
   duration: number;
   bpm?: number;
-  firstBeatTime?: number;
+  /** Beat clock of the track (beat 0 = first downbeat); the grid follows it, drift included. */
+  clock?: BeatClock;
   phrases?: Phrase[];
+  cuePoint?: number | null;
   onSeek: (time: number) => void;
 }
 
@@ -20,13 +23,39 @@ const PHRASE_COLORS: Record<PhraseLabel, string> = {
   outro: '#8a8f98',
 };
 
-function phraseStartTime(phrase: Phrase, firstBeatTime: number, bpm: number): number {
-  return firstBeatTime + (phrase.startBar * 4 * 60) / bpm;
+// Spectrum colouring: lows red-orange, mids green, highs blue-white.
+const LOW_RGB = [240, 96, 56];
+const MID_RGB = [96, 206, 120];
+const HIGH_RGB = [132, 180, 255];
+
+function spectralColor(low: number, mid: number, high: number): string {
+  const sum = low + mid + high;
+  if (sum <= 0) return 'rgb(110,110,120)';
+  const channel = (i: number) => Math.round((LOW_RGB[i] * low + MID_RGB[i] * mid + HIGH_RGB[i] * high) / sum);
+  return `rgb(${channel(0)},${channel(1)},${channel(2)})`;
 }
+
+const WAVE_BG = '#0b0b0f';
+const PLAYHEAD = '#ff5a3c';
+const CUE = '#ffffff';
 
 // Zoom levels in bars (4 beats per bar)
 const ZOOM_LEVELS = [2, 4, 8, 16, 32];
-const DEFAULT_ZOOM_INDEX = 2; // 8 bars
+const DEFAULT_ZOOM_INDEX = 2;
+
+/** Width-aware re-rendering: canvases redraw when their box changes size. */
+function useElementWidth<T extends HTMLElement>(): [React.RefObject<T | null>, number] {
+  const ref = useRef<T>(null);
+  const [width, setWidth] = useState(0);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const observer = new ResizeObserver(([entry]) => setWidth(Math.round(entry.contentRect.width)));
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+  return [ref, width];
+}
 
 export function Waveform({
   data,
@@ -34,32 +63,30 @@ export function Waveform({
   currentTime,
   duration,
   bpm,
-  firstBeatTime = 0,
+  clock,
   phrases,
+  cuePoint,
   onSeek,
 }: WaveformProps) {
   const [zoomIndex, setZoomIndex] = useState(DEFAULT_ZOOM_INDEX);
+  const [wrapperRef, width] = useElementWidth<HTMLDivElement>();
   const mainCanvasRef = useRef<HTMLCanvasElement>(null);
   const overviewCanvasRef = useRef<HTMLCanvasElement>(null);
   const rafRef = useRef<number>(0);
 
-  // Calculate zoom in seconds based on BPM and bar count
   const zoomBars = ZOOM_LEVELS[zoomIndex];
-  const beatsWindow = zoomBars * 4;
-  const zoomSeconds = bpm && bpm > 0 ? (beatsWindow * 60) / bpm : 16;
+  const zoomSeconds = bpm && bpm > 0 ? (zoomBars * 4 * 60) / bpm : 16;
 
-  // Calculate visible window - playhead is ALWAYS at center
-  const windowDuration = Math.min(zoomSeconds, duration);
-  const halfWindow = windowDuration / 2;
-  const windowStart = Math.max(0, Math.min(duration - windowDuration, currentTime - halfWindow));
+  // The visible window keeps the playhead centred.
+  const windowDuration = Math.min(zoomSeconds, duration || zoomSeconds);
+  const windowStart = Math.max(0, Math.min(Math.max(0, duration - windowDuration), currentTime - windowDuration / 2));
   const windowEnd = windowStart + windowDuration;
 
-  // Overview calculations
-  const overviewPlayhead = duration > 0 ? (currentTime / duration) * 100 : 0;
-  const viewportStart = duration > 0 ? (windowStart / duration) * 100 : 0;
-  const viewportWidth = duration > 0 ? (windowDuration / duration) * 100 : 100;
+  const overviewPlayhead = duration > 0 ? currentTime / duration : 0;
+  const viewportStart = duration > 0 ? windowStart / duration : 0;
+  const viewportWidth = duration > 0 ? windowDuration / duration : 1;
 
-  // Draw main zoomed waveform using requestAnimationFrame
+  // Main zoomed waveform
   useEffect(() => {
     const canvas = mainCanvasRef.current;
     if (!canvas || data.length === 0) return;
@@ -67,323 +94,225 @@ export function Waveform({
     const draw = () => {
       const ctx = canvas.getContext('2d');
       if (!ctx) return;
-
       const rect = canvas.getBoundingClientRect();
       const dpr = window.devicePixelRatio || 1;
-
-      // Only resize if needed
-      if (canvas.width !== rect.width * dpr || canvas.height !== rect.height * dpr) {
-        canvas.width = rect.width * dpr;
-        canvas.height = rect.height * dpr;
+      if (rect.width === 0 || rect.height === 0) return;
+      if (canvas.width !== Math.round(rect.width * dpr) || canvas.height !== Math.round(rect.height * dpr)) {
+        canvas.width = Math.round(rect.width * dpr);
+        canvas.height = Math.round(rect.height * dpr);
       }
-
-      ctx.setTransform(1, 0, 0, 1, 0, 0);
-      ctx.scale(dpr, dpr);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.imageSmoothingEnabled = false;
 
-      const width = rect.width;
-      const height = rect.height;
-      const centerY = height / 2;
+      const w = rect.width;
+      const h = rect.height;
+      const centerY = h / 2;
+      ctx.fillStyle = WAVE_BG;
+      ctx.fillRect(0, 0, w, h);
 
-      // Dark background
-      ctx.fillStyle = '#0a0a14';
-      ctx.fillRect(0, 0, width, height);
-
-      // Draw waveform - Traktor style with thin 1px lines
-      const startIdx = Math.floor((windowStart / duration) * data.length);
-      const endIdx = Math.ceil((windowEnd / duration) * data.length);
-      const visibleSamples = endIdx - startIdx;
-
-      if (visibleSamples > 0) {
-        const useSpectral = spectralData && spectralData.low.length > 0;
-
-        // Draw one line per pixel for maximum detail
-        const numLines = Math.floor(width);
-
-        for (let px = 0; px < numLines; px++) {
-          // Get interpolated data position
-          const dataPos = startIdx + (px / numLines) * visibleSamples;
-          const dataIdx = Math.floor(dataPos);
-          const nextIdx = Math.min(dataIdx + 1, data.length - 1);
-          const frac = dataPos - dataIdx;
-
-          // Interpolate amplitude for smooth waveform
-          const amp1 = data[dataIdx] || 0;
-          const amp2 = data[nextIdx] || 0;
-          const amplitude = amp1 * (1 - frac) + amp2 * frac;
-
-          const lineHeight = amplitude * centerY * 0.85;
-
-          if (lineHeight < 0.5) continue; // Skip silent parts
-
-          // Spectral coloring - Traktor style
-          let r: number, g: number, b: number;
-          if (useSpectral) {
-            const low = spectralData.low[dataIdx] || 0;
-            const mid = spectralData.mid ? spectralData.mid[dataIdx] || 0 : 0.5;
-            const high = spectralData.high[dataIdx] || 0;
-
-            // Bass = blue/cyan, mids = green/teal, highs = orange/yellow
-            if (low > high && low > mid) {
-              // Bass dominant - blue gradient
-              r = Math.floor(40 + low * 60);
-              g = Math.floor(120 + low * 80);
-              b = Math.floor(180 + low * 75);
-            } else if (high > low && high > mid) {
-              // High dominant - orange/yellow
-              r = Math.floor(200 + high * 55);
-              g = Math.floor(150 + high * 80);
-              b = Math.floor(50 + high * 30);
-            } else {
-              // Mid dominant - cyan/teal
-              r = Math.floor(60 + mid * 80);
-              g = Math.floor(180 + mid * 60);
-              b = Math.floor(160 + mid * 60);
-            }
-          } else {
-            // Default cyan
-            r = 78;
-            g = 205;
-            b = 196;
-          }
-
-          // Draw vertical line (1px wide)
-          ctx.fillStyle = `rgb(${r},${g},${b})`;
-          ctx.fillRect(px, centerY - lineHeight, 1, lineHeight * 2);
+      // Beat grid behind the waveform.
+      if (clock && bpm && bpm > 0) {
+        let beat = Math.ceil(clock.beatAt(windowStart));
+        let time = clock.timeOf(beat);
+        let guard = 0;
+        while (time <= windowEnd && guard++ < 4096) {
+          const x = Math.floor(((time - windowStart) / windowDuration) * w) + 0.5;
+          const downbeat = ((beat % 4) + 4) % 4 === 0;
+          ctx.strokeStyle = downbeat ? 'rgba(255,255,255,0.28)' : 'rgba(255,255,255,0.09)';
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(x, downbeat ? 0 : h * 0.15);
+          ctx.lineTo(x, downbeat ? h : h * 0.85);
+          ctx.stroke();
+          beat++;
+          time = clock.timeOf(beat);
         }
       }
 
-      // Draw beat grid on top (subtle)
-      if (bpm && bpm > 0) {
-        const beatDuration = 60 / bpm;
-        // Beat 0 is the first downbeat; the grid extends before it too.
-        let beatCount = Math.ceil((windowStart - firstBeatTime) / beatDuration);
-        let beatTime = firstBeatTime + beatCount * beatDuration;
-
-        ctx.globalCompositeOperation = 'lighter';
-        while (beatTime <= windowEnd) {
-          const x = ((beatTime - windowStart) / windowDuration) * width;
-          const isDownbeat = ((beatCount % 4) + 4) % 4 === 0;
-
-          ctx.strokeStyle = isDownbeat ? 'rgba(255, 255, 255, 0.25)' : 'rgba(255, 255, 255, 0.08)';
-          ctx.lineWidth = isDownbeat ? 1 : 0.5;
-          ctx.beginPath();
-          ctx.moveTo(Math.floor(x) + 0.5, 0);
-          ctx.lineTo(Math.floor(x) + 0.5, height);
-          ctx.stroke();
-
-          beatTime += beatDuration;
-          beatCount++;
+      // Waveform: one line per pixel.
+      const startIdx = Math.floor((windowStart / duration) * data.length);
+      const endIdx = Math.ceil((windowEnd / duration) * data.length);
+      const visible = endIdx - startIdx;
+      const useSpectral = !!spectralData && spectralData.low.length > 0;
+      if (visible > 0) {
+        const columns = Math.floor(w);
+        for (let px = 0; px < columns; px++) {
+          const pos = startIdx + (px / columns) * visible;
+          const idx = Math.floor(pos);
+          const next = Math.min(idx + 1, data.length - 1);
+          const frac = pos - idx;
+          const amplitude = (data[idx] || 0) * (1 - frac) + (data[next] || 0) * frac;
+          const half = amplitude * centerY * 0.9;
+          if (half < 0.5) continue;
+          ctx.fillStyle = useSpectral
+            ? spectralColor(spectralData!.low[idx] || 0, spectralData!.mid?.[idx] || 0, spectralData!.high[idx] || 0)
+            : '#8ab4ff';
+          ctx.fillRect(px, centerY - half, 1, half * 2);
         }
-        ctx.globalCompositeOperation = 'source-over';
+      }
 
-        // Phrase starts, labelled
-        ctx.font = '9px sans-serif';
+      // Phrase starts, labelled.
+      if (clock) {
+        ctx.font = '600 9px -apple-system, "Segoe UI", sans-serif';
         ctx.textBaseline = 'top';
         for (const phrase of phrases ?? []) {
-          const time = phraseStartTime(phrase, firstBeatTime, bpm);
+          const time = clock.timeOf(phrase.startBar * 4);
           if (time < windowStart || time > windowEnd) continue;
-          const x = Math.floor(((time - windowStart) / windowDuration) * width) + 0.5;
+          const x = Math.floor(((time - windowStart) / windowDuration) * w) + 0.5;
           ctx.strokeStyle = PHRASE_COLORS[phrase.label];
           ctx.lineWidth = 2;
           ctx.beginPath();
           ctx.moveTo(x, 0);
-          ctx.lineTo(x, height);
+          ctx.lineTo(x, h);
           ctx.stroke();
           ctx.fillStyle = PHRASE_COLORS[phrase.label];
-          ctx.fillText(phrase.label.toUpperCase(), x + 3, 2);
+          ctx.fillText(phrase.label.toUpperCase(), x + 4, 3);
         }
       }
 
-      // Center line (subtle)
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
-      ctx.lineWidth = 0.5;
-      ctx.beginPath();
-      ctx.moveTo(0, centerY);
-      ctx.lineTo(width, centerY);
-      ctx.stroke();
-
-      // Draw playhead - fixed at center with glow
-      const playheadX = ((currentTime - windowStart) / windowDuration) * width;
-
-      // Glow
-      ctx.shadowColor = '#ff4444';
-      ctx.shadowBlur = 8;
-      ctx.strokeStyle = '#ff4444';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(playheadX, 0);
-      ctx.lineTo(playheadX, height);
-      ctx.stroke();
-      ctx.shadowBlur = 0;
-
-      // Inner bright line
-      ctx.strokeStyle = '#ff6666';
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(playheadX, 0);
-      ctx.lineTo(playheadX, height);
-      ctx.stroke();
-    };
-
-    // Use RAF for smooth animation
-    rafRef.current = requestAnimationFrame(draw);
-
-    return () => {
-      if (rafRef.current) {
-        cancelAnimationFrame(rafRef.current);
+      // Cue point.
+      if (cuePoint !== null && cuePoint !== undefined && cuePoint >= windowStart && cuePoint <= windowEnd) {
+        const x = Math.floor(((cuePoint - windowStart) / windowDuration) * w) + 0.5;
+        ctx.strokeStyle = CUE;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, h);
+        ctx.stroke();
+        ctx.fillStyle = CUE;
+        ctx.beginPath();
+        ctx.moveTo(x - 5, h);
+        ctx.lineTo(x + 5, h);
+        ctx.lineTo(x, h - 6);
+        ctx.closePath();
+        ctx.fill();
       }
-    };
-  }, [
-    data,
-    spectralData,
-    currentTime,
-    duration,
-    windowStart,
-    windowEnd,
-    windowDuration,
-    bpm,
-    firstBeatTime,
-    phrases,
-  ]);
 
-  // Cache for overview waveform
+      // Playhead, fixed at the centre.
+      const playheadX = Math.floor(((currentTime - windowStart) / windowDuration) * w) + 0.5;
+      ctx.strokeStyle = PLAYHEAD;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(playheadX, 0);
+      ctx.lineTo(playheadX, h);
+      ctx.stroke();
+      ctx.fillStyle = PLAYHEAD;
+      ctx.beginPath();
+      ctx.moveTo(playheadX - 5, 0);
+      ctx.lineTo(playheadX + 5, 0);
+      ctx.lineTo(playheadX, 6);
+      ctx.closePath();
+      ctx.fill();
+    };
+
+    rafRef.current = requestAnimationFrame(draw);
+    return () => cancelAnimationFrame(rafRef.current);
+  }, [data, spectralData, currentTime, duration, windowStart, windowEnd, windowDuration, bpm, clock, phrases, cuePoint, width]);
+
+  // Overview: the whole track pre-rendered once, then composited with the viewport and playhead.
   const cachedOverviewRef = useRef<HTMLCanvasElement | null>(null);
 
-  // Pre-render overview waveform (only when data changes)
   useEffect(() => {
-    if (data.length === 0) return;
-
     const canvas = overviewCanvasRef.current;
-    if (!canvas) return;
-
+    if (!canvas || data.length === 0) return;
     const rect = canvas.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return;
     const dpr = window.devicePixelRatio || 1;
     const offscreen = document.createElement('canvas');
-    offscreen.width = rect.width * dpr;
-    offscreen.height = 24 * dpr;
-
+    offscreen.width = Math.round(rect.width * dpr);
+    offscreen.height = Math.round(rect.height * dpr);
     const ctx = offscreen.getContext('2d');
     if (!ctx) return;
-
     ctx.scale(dpr, dpr);
     ctx.imageSmoothingEnabled = false;
 
-    const width = rect.width;
-    const height = 24;
-    const centerY = height / 2;
+    const w = rect.width;
+    const h = rect.height;
+    const centerY = h / 2;
+    ctx.fillStyle = WAVE_BG;
+    ctx.fillRect(0, 0, w, h);
 
-    ctx.fillStyle = '#0a0a14';
-    ctx.fillRect(0, 0, width, height);
-
-    // Draw 1px lines for overview too
-    const numLines = Math.floor(width);
-    const useSpectral = spectralData && spectralData.low.length > 0;
-
-    for (let px = 0; px < numLines; px++) {
-      const dataIdx = Math.floor((px / numLines) * data.length);
-      const amplitude = data[dataIdx] || 0;
-      const lineHeight = amplitude * centerY * 0.85;
-
-      if (lineHeight < 0.3) continue;
-
-      if (useSpectral) {
-        const low = spectralData.low[dataIdx] || 0;
-        const mid = spectralData.mid ? spectralData.mid[dataIdx] || 0 : 0.5;
-        const high = spectralData.high[dataIdx] || 0;
-
-        let r: number, g: number, b: number;
-        if (low > high && low > mid) {
-          r = Math.floor(40 + low * 60);
-          g = Math.floor(120 + low * 80);
-          b = Math.floor(180 + low * 75);
-        } else if (high > low && high > mid) {
-          r = Math.floor(200 + high * 55);
-          g = Math.floor(150 + high * 80);
-          b = Math.floor(50 + high * 30);
-        } else {
-          r = Math.floor(60 + mid * 80);
-          g = Math.floor(180 + mid * 60);
-          b = Math.floor(160 + mid * 60);
-        }
-        ctx.fillStyle = `rgb(${r},${g},${b})`;
-      } else {
-        ctx.fillStyle = '#4ecdc4';
-      }
-
-      ctx.fillRect(px, centerY - lineHeight, 1, lineHeight * 2);
+    const useSpectral = !!spectralData && spectralData.low.length > 0;
+    const columns = Math.floor(w);
+    for (let px = 0; px < columns; px++) {
+      const from = Math.floor((px / columns) * data.length);
+      const to = Math.max(from + 1, Math.floor(((px + 1) / columns) * data.length));
+      let amplitude = 0;
+      for (let i = from; i < to; i++) amplitude = Math.max(amplitude, data[i] || 0);
+      const half = amplitude * (centerY - 2) * 0.95;
+      if (half < 0.3) continue;
+      ctx.fillStyle = useSpectral
+        ? spectralColor(spectralData!.low[from] || 0, spectralData!.mid?.[from] || 0, spectralData!.high[from] || 0)
+        : '#8ab4ff';
+      ctx.fillRect(px, centerY - half, 1, half * 2);
     }
 
-    // Phrase map along the bottom edge
-    if (bpm && bpm > 0 && duration > 0) {
+    // Phrase map along the bottom edge.
+    if (clock && duration > 0) {
       (phrases ?? []).forEach((phrase, i, all) => {
-        const start = phraseStartTime(phrase, firstBeatTime, bpm);
-        const end = i + 1 < all.length ? phraseStartTime(all[i + 1], firstBeatTime, bpm) : duration;
+        const start = clock.timeOf(phrase.startBar * 4);
+        const end = i + 1 < all.length ? clock.timeOf(all[i + 1].startBar * 4) : duration;
         ctx.fillStyle = PHRASE_COLORS[phrase.label];
-        ctx.fillRect((start / duration) * width, height - 3, ((end - start) / duration) * width, 3);
+        ctx.fillRect((start / duration) * w, h - 3, Math.max(1, ((end - start) / duration) * w), 3);
       });
     }
-
     cachedOverviewRef.current = offscreen;
-  }, [data, spectralData, phrases, bpm, firstBeatTime, duration]);
+  }, [data, spectralData, phrases, clock, duration, width]);
 
-  // Draw overview with viewport and playhead (fast - just compositing)
   useEffect(() => {
     const canvas = overviewCanvasRef.current;
     if (!canvas) return;
-
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
-
-    const dpr = window.devicePixelRatio || 1;
     const rect = canvas.getBoundingClientRect();
-
-    if (canvas.width !== rect.width * dpr || canvas.height !== rect.height * dpr) {
-      canvas.width = rect.width * dpr;
-      canvas.height = rect.height * dpr;
+    if (rect.width === 0 || rect.height === 0) return;
+    const dpr = window.devicePixelRatio || 1;
+    if (canvas.width !== Math.round(rect.width * dpr) || canvas.height !== Math.round(rect.height * dpr)) {
+      canvas.width = Math.round(rect.width * dpr);
+      canvas.height = Math.round(rect.height * dpr);
     }
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const w = rect.width;
+    const h = rect.height;
 
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.scale(dpr, dpr);
-
-    const width = rect.width;
-    const height = rect.height;
-
-    // Draw cached waveform or clear
     const cached = cachedOverviewRef.current;
     if (cached) {
       ctx.imageSmoothingEnabled = false;
-      ctx.drawImage(cached, 0, 0, cached.width, cached.height, 0, 0, width, height);
+      ctx.drawImage(cached, 0, 0, cached.width, cached.height, 0, 0, w, h);
     } else {
-      ctx.fillStyle = '#0a0a14';
-      ctx.fillRect(0, 0, width, height);
+      ctx.fillStyle = WAVE_BG;
+      ctx.fillRect(0, 0, w, h);
     }
 
-    // Draw viewport indicator
-    const vpX = (viewportStart / 100) * width;
-    const vpW = (viewportWidth / 100) * width;
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.6)';
+    // Viewport box
+    ctx.fillStyle = 'rgba(255,255,255,0.08)';
+    ctx.fillRect(viewportStart * w, 0, viewportWidth * w, h);
+    ctx.strokeStyle = 'rgba(255,255,255,0.35)';
     ctx.lineWidth = 1;
-    ctx.strokeRect(vpX, 0, vpW, height);
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.1)';
-    ctx.fillRect(vpX, 0, vpW, height);
+    ctx.strokeRect(Math.floor(viewportStart * w) + 0.5, 0.5, Math.max(2, viewportWidth * w) - 1, h - 1);
 
-    // Draw playhead
-    const playheadX = (overviewPlayhead / 100) * width;
-    ctx.strokeStyle = '#ff4444';
-    ctx.lineWidth = 2;
+    if (cuePoint !== null && cuePoint !== undefined && duration > 0) {
+      const x = Math.floor((cuePoint / duration) * w) + 0.5;
+      ctx.strokeStyle = CUE;
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, h);
+      ctx.stroke();
+    }
+
+    const playheadX = Math.floor(overviewPlayhead * w) + 0.5;
+    ctx.strokeStyle = PLAYHEAD;
+    ctx.lineWidth = 1.5;
     ctx.beginPath();
     ctx.moveTo(playheadX, 0);
-    ctx.lineTo(playheadX, height);
+    ctx.lineTo(playheadX, h);
     ctx.stroke();
-  }, [overviewPlayhead, viewportStart, viewportWidth]);
+  }, [overviewPlayhead, viewportStart, viewportWidth, cuePoint, duration, width, data, spectralData, phrases, clock]);
 
   const handleOverviewClick = useCallback(
     (e: React.MouseEvent<HTMLCanvasElement>) => {
       const rect = e.currentTarget.getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      const percent = x / rect.width;
-      onSeek(percent * duration);
+      onSeek(((e.clientX - rect.left) / rect.width) * duration);
     },
     [duration, onSeek],
   );
@@ -391,32 +320,22 @@ export function Waveform({
   const handleMainClick = useCallback(
     (e: React.MouseEvent<HTMLCanvasElement>) => {
       const rect = e.currentTarget.getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      const percent = x / rect.width;
-      const time = windowStart + percent * windowDuration;
+      const time = windowStart + ((e.clientX - rect.left) / rect.width) * windowDuration;
       onSeek(Math.max(0, Math.min(duration, time)));
     },
     [windowStart, windowDuration, duration, onSeek],
   );
 
   return (
-    <div className="waveform-wrapper">
-      {/* Main zoomed waveform */}
-      <canvas ref={mainCanvasRef} className="waveform-main-canvas" onClick={handleMainClick} />
-
-      {/* Overview strip */}
-      <canvas
-        ref={overviewCanvasRef}
-        className="waveform-overview-canvas"
-        onClick={handleOverviewClick}
-      />
-
-      {/* Zoom buttons */}
-      <div className="waveform-zoom-buttons">
+    <div className="wave" ref={wrapperRef}>
+      <canvas ref={overviewCanvasRef} className="wave-overview" onClick={handleOverviewClick} />
+      <canvas ref={mainCanvasRef} className="wave-main" onClick={handleMainClick} />
+      <div className="wave-zoom">
         {ZOOM_LEVELS.map((level, idx) => (
           <button
             key={level}
-            className={`zoom-button ${idx === zoomIndex ? 'active' : ''}`}
+            className={`zoom-btn ${idx === zoomIndex ? 'active' : ''}`}
+            title={`${level} bars across`}
             onClick={() => setZoomIndex(idx)}>
             {level}
           </button>
@@ -428,11 +347,11 @@ export function Waveform({
 
 export function EmptyWaveform() {
   return (
-    <div className="waveform-wrapper">
-      <div className="waveform-main-empty">
-        <span>No track loaded</span>
+    <div className="wave">
+      <div className="wave-overview wave-empty" />
+      <div className="wave-main wave-empty wave-empty-main">
+        <span>Drop a track here, or double-click one in the browser</span>
       </div>
-      <div className="waveform-overview-empty" />
     </div>
   );
 }

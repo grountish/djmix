@@ -1,43 +1,45 @@
+import { useMemo } from 'react';
 import type { EqBand } from '@/types';
+import { filterKnobToCutoffs } from '@/audio/engine/curves';
+import { getMeter, type MeterTarget } from '@/audio/engine/liveGraph';
+import { Knob } from './Knob';
+import { Meter } from './Meter';
 
 type DeckId = 'A' | 'B';
 
-interface ChannelControls {
+export interface ChannelControls {
   eq: Record<EqBand, number>;
   filter: number;
+  volume: number;
 }
 
-const EQ_ROWS: { band: EqBand | 'filter'; label: string; title: string }[] = [
-  { band: 'high', label: 'Hi', title: 'High band (above 2.5 kHz)' },
-  { band: 'mid', label: 'Mid', title: 'Mid band (200 Hz – 2.5 kHz)' },
-  { band: 'low', label: 'Low', title: 'Low band (below 200 Hz)' },
-  { band: 'filter', label: 'Flt', title: 'Filter: left low-pass, right high-pass' },
+const ROWS: { control: EqBand | 'filter'; label: string }[] = [
+  { control: 'high', label: 'HI' },
+  { control: 'mid', label: 'MID' },
+  { control: 'low', label: 'LOW' },
+  { control: 'filter', label: 'FLT' },
 ];
 
-function EqControl({
-  value,
-  title,
-  isFilter,
-  onChange,
-}: {
-  value: number;
-  title: string;
-  isFilter: boolean;
-  onChange: (value: number) => void;
-}) {
-  const state = value <= -1 && !isFilter ? 'killed' : value !== 0 ? 'moved' : '';
-  return (
-    <input
-      type="range"
-      className={`eq-slider ${state}`}
-      min="-100"
-      max="100"
-      value={Math.round(value * 100)}
-      title={`${title} (double-click to reset)`}
-      onChange={(e) => onChange(Number(e.target.value) / 100)}
-      onDoubleClick={() => onChange(0)}
-    />
-  );
+const DECK_COLOR: Record<DeckId, string> = { A: 'var(--deck-a)', B: 'var(--deck-b)' };
+
+function eqTitle(label: string, knob: number): string {
+  if (knob <= -1) return `${label}: kill`;
+  const db = knob >= 0 ? 6 * knob : 40 * Math.log10(1 + knob);
+  return `${label}: ${db >= 0 ? '+' : ''}${db.toFixed(1)} dB`;
+}
+
+function filterTitle(knob: number): string {
+  if (Math.abs(knob) < 0.005) return 'Filter: off';
+  const { lowpassHz, highpassHz } = filterKnobToCutoffs(knob, 22050);
+  return knob < 0 ? `Low-pass ${Math.round(lowpassHz)} Hz` : `High-pass ${Math.round(highpassHz)} Hz`;
+}
+
+function meterFor(target: MeterTarget): AnalyserNode | null {
+  try {
+    return getMeter(target);
+  } catch {
+    return null;
+  }
 }
 
 interface MixerProps {
@@ -45,16 +47,14 @@ interface MixerProps {
   channelB: ChannelControls;
   onEqChange: (deck: DeckId, band: EqBand, value: number) => void;
   onFilterChange: (deck: DeckId, value: number) => void;
+  onVolumeChange: (deck: DeckId, volume: number) => void;
   crossfader: number;
-  masterVolume: number;
-  volumeA: number;
-  volumeB: number;
-  automixEnabled: boolean;
-  canTriggerAutomix: boolean;
   onCrossfaderChange: (value: number) => void;
+  masterVolume: number;
   onMasterVolumeChange: (volume: number) => void;
-  onVolumeAChange: (volume: number) => void;
-  onVolumeBChange: (volume: number) => void;
+  automixEnabled: boolean;
+  isTransitioning: boolean;
+  canTriggerAutomix: boolean;
   onAutomixToggle: () => void;
   onTriggerAutomix: () => void;
 }
@@ -64,118 +64,123 @@ export function Mixer({
   channelB,
   onEqChange,
   onFilterChange,
+  onVolumeChange,
   crossfader,
-  masterVolume,
-  volumeA,
-  volumeB,
-  automixEnabled,
-  canTriggerAutomix,
   onCrossfaderChange,
+  masterVolume,
   onMasterVolumeChange,
-  onVolumeAChange,
-  onVolumeBChange,
+  automixEnabled,
+  isTransitioning,
+  canTriggerAutomix,
   onAutomixToggle,
   onTriggerAutomix,
 }: MixerProps) {
+  const meters = useMemo(() => ({ A: meterFor('A'), B: meterFor('B'), master: meterFor('master') }), []);
+  const channels: Record<DeckId, ChannelControls> = { A: channelA, B: channelB };
+
+  const knob = (deck: DeckId, control: EqBand | 'filter', label: string) => {
+    const channel = channels[deck];
+    if (control === 'filter') {
+      return (
+        <Knob
+          value={channel.filter}
+          label=""
+          title={`${filterTitle(channel.filter)} (double-click to reset)`}
+          color={DECK_COLOR[deck]}
+          onChange={(value) => onFilterChange(deck, value)}
+        />
+      );
+    }
+    return (
+      <Knob
+        value={channel.eq[control]}
+        label=""
+        title={`${eqTitle(label, channel.eq[control])} (double-click to reset)`}
+        color={DECK_COLOR[deck]}
+        killed={channel.eq[control] <= -1}
+        onChange={(value) => onEqChange(deck, control, value)}
+      />
+    );
+  };
+
   return (
-    <div className="mixer-section">
-      <div className="mixer-header">Mixer</div>
+    <div className="mixer">
+      <div className="mixer-knobs">
+        {ROWS.map(({ control, label }) => (
+          <div className="mixer-row" key={control}>
+            {knob('A', control, label)}
+            <span className="mixer-row-label">{label}</span>
+            {knob('B', control, label)}
+          </div>
+        ))}
+      </div>
 
-      <div className="eq-section">
-        {EQ_ROWS.map(({ band, label, title }) => {
-          const control = (deck: DeckId, channel: ChannelControls) =>
-            band === 'filter' ? (
-              <EqControl
-                value={channel.filter}
-                title={title}
-                isFilter
-                onChange={(value) => onFilterChange(deck, value)}
+      <div className="mixer-faders">
+        {(['A', 'B'] as const).map((deck) => (
+          <div className={`channel channel-${deck.toLowerCase()}`} key={deck}>
+            <div className="channel-strip">
+              <input
+                type="range"
+                className="channel-fader"
+                min="0"
+                max="100"
+                value={Math.round(channels[deck].volume * 100)}
+                title={`Channel ${deck} fader: ${Math.round(channels[deck].volume * 100)}%`}
+                onChange={(e) => onVolumeChange(deck, Number(e.target.value) / 100)}
               />
-            ) : (
-              <EqControl
-                value={channel.eq[band]}
-                title={title}
-                isFilter={false}
-                onChange={(value) => onEqChange(deck, band, value)}
-              />
-            );
-          return (
-            <div className="eq-row" key={band}>
-              {control('A', channelA)}
-              <span className="eq-label">{label}</span>
-              {control('B', channelB)}
+              <Meter analyser={meters[deck]} className="channel-meter" />
             </div>
-          );
-        })}
-      </div>
-
-      <div className="channel-faders">
-        <div className="channel-fader">
-          <span className="channel-label">A</span>
-          <input
-            type="range"
-            className="channel-fader-slider"
-            min="0"
-            max="100"
-            value={volumeA * 100}
-            onChange={(e) => onVolumeAChange(Number(e.target.value) / 100)}
-          />
-          <span className="channel-value">{Math.round(volumeA * 100)}</span>
-        </div>
-        <div className="channel-fader">
-          <span className="channel-label">B</span>
-          <input
-            type="range"
-            className="channel-fader-slider"
-            min="0"
-            max="100"
-            value={volumeB * 100}
-            onChange={(e) => onVolumeBChange(Number(e.target.value) / 100)}
-          />
-          <span className="channel-value">{Math.round(volumeB * 100)}</span>
+            <span className="channel-name">{deck}</span>
+          </div>
+        ))}
+        <div className="master-meter">
+          <Meter analyser={meters.master} className="master-meter-canvas" />
+          <span className="channel-name master-name">MST</span>
         </div>
       </div>
 
-      <div className="crossfader-container">
-        <span className="crossfader-label">A</span>
+      <div className="crossfader">
+        <span className="xf-label xf-a">A</span>
         <input
           type="range"
           className="crossfader-slider"
           min="-100"
           max="100"
-          value={crossfader * 100}
+          value={Math.round(crossfader * 100)}
+          title="Crossfader (double-click to centre)"
           onChange={(e) => onCrossfaderChange(Number(e.target.value) / 100)}
+          onDoubleClick={() => onCrossfaderChange(0)}
         />
-        <span className="crossfader-label">B</span>
+        <span className="xf-label xf-b">B</span>
       </div>
 
-      <div className="automix-controls">
+      <div className="mixer-auto">
         <button
-          className={`automix-button ${automixEnabled ? 'active' : ''}`}
+          className={`btn-auto ${automixEnabled ? 'active' : ''}`}
           onClick={onAutomixToggle}
-          title="Enable/disable automix mode">
-          Auto
+          title="Auto DJ: plays the set hands-off, cueing and mixing in the next track">
+          AUTO
         </button>
         <button
-          className="automix-trigger-button"
+          className={`btn-mixnow ${isTransitioning ? 'busy' : ''}`}
           onClick={onTriggerAutomix}
-          disabled={!canTriggerAutomix}
+          disabled={!canTriggerAutomix || isTransitioning}
           title="Mix into the other deck at the next 16/32-bar entry">
-          Mix now
+          {isTransitioning ? 'MIXING' : 'MIX NOW'}
         </button>
       </div>
 
-      <div className="master-volume">
-        <span className="bpm-label">Master</span>
+      <div className="master">
+        <span className="master-label">MASTER</span>
         <input
           type="range"
-          className="master-volume-slider"
+          className="master-slider"
           min="0"
           max="100"
-          value={masterVolume * 100}
+          value={Math.round(masterVolume * 100)}
           onChange={(e) => onMasterVolumeChange(Number(e.target.value) / 100)}
         />
-        <span className="bpm-label">{Math.round(masterVolume * 100)}%</span>
+        <span className="master-value">{Math.round(masterVolume * 100)}</span>
       </div>
     </div>
   );

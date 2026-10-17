@@ -60,6 +60,8 @@ export interface PlaybackState {
 export interface DeckState {
   track: Track | null;
   playback: PlaybackState;
+  /** Cue point (track seconds): set by CUE while paused or by Auto when it cues the next track. */
+  cuePoint: number | null;
   targetBpm: number | null;
   playbackMode: PlaybackMode;
   /** EQ knob positions: -1 kill, 0 unity, +1 = +6 dB. */
@@ -89,7 +91,7 @@ export interface FileFingerprint {
 }
 
 export interface SortOption {
-  field: 'fileName' | 'bpm' | 'duration';
+  field: 'title' | 'artist' | 'bpm' | 'key' | 'duration';
   direction: 'asc' | 'desc';
 }
 
