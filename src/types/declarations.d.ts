@@ -18,6 +18,8 @@ declare module 'signalsmith-stretch' {
     addBuffers(buffers: Float32Array[], transfer?: Transferable[]): Promise<number>;
     dropBuffers(toSeconds?: number): Promise<{ start: number; end: number }>;
     latency(): Promise<number>;
+    /** Reports the input position every `seconds` of playback. */
+    setUpdateInterval(seconds: number, callback: (inputTime: number) => void): Promise<unknown>;
   }
 
   export default function SignalsmithStretch(
