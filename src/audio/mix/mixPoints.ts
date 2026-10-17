@@ -39,6 +39,32 @@ export interface MixPoints {
   incomingStartBar: number;
   /** Bar of the overlap (0-based) where the basslines swap, on a downbeat. */
   bassSwapBar: number;
+  /** A phrase of the outgoing track repeated to make room for the blend (see OutgoingLoop). */
+  outgoingLoop?: OutgoingLoop;
+}
+
+/**
+ * The outgoing track loops bars [startBar, startBar + bars) from the moment it reaches their
+ * end until it is stopped, so a blend can be longer than the track has bars left. Outgoing bars
+ * in a plan count along this timeline: bar startBar + bars is the loop start again, and so on.
+ */
+export interface OutgoingLoop {
+  startBar: number;
+  bars: number;
+}
+
+/** Timeline bar → track bar, with the loop repeating from its end. */
+export function loopedTrackBar(loop: OutgoingLoop | undefined, bar: number): number {
+  if (!loop) return bar;
+  const end = loop.startBar + loop.bars;
+  return bar < end ? bar : loop.startBar + ((bar - loop.startBar) % loop.bars);
+}
+
+/** Jumps back to the loop start up to and including timeline `bar`. */
+export function loopWrapsBy(loop: OutgoingLoop | undefined, bar: number): number {
+  if (!loop) return 0;
+  const end = loop.startBar + loop.bars;
+  return bar < end ? 0 : Math.floor((bar - end) / loop.bars) + 1;
 }
 
 /** Offset of the 8-bar phrase grid: phrases start on it (bar 0 aside). */
@@ -86,13 +112,21 @@ const DROP_DELAY_WEIGHT = 0.05;
 const MAX_PICKUP_BARS = 2;
 /** Per bar of the incoming track skipped past its first drop. */
 const SKIP_WEIGHT = 0.05;
+/** A blend shorter than this is worth looping the outgoing track for. */
+const LOOP_BELOW_BARS = 16;
+/** Each repeat of the loop is heard as one; a couple pass as an extended outro, more don't. */
+const LOOP_WRAP_WEIGHT = 1.5;
+const MAX_LOOP_WRAPS = 2;
+/** A loop whose bars all carry the bassline sounds like the track, not a stutter. */
+const LOOP_BASS_BONUS = 1;
 
 /**
  * Where to mix. Both tracks change on their phrase grids at the same moment. Every
  * combination of overlap length, outgoing start, incoming cue and bass-swap bar is scored:
  * both tracks should have their kick before the swap, the incoming drop should land on the
  * swap (or failing that the outgoing bass should leave there), longer is better, and for Auto
- * later is better while Mix now wants the next entry.
+ * later is better while Mix now wants the next entry. When the outgoing track hasn't the bars
+ * left for a 16-bar blend, one of its kick phrases is looped to make them.
  */
 export function chooseMixPoints(input: MixPointInput): MixPoints {
   const { outgoing, incoming } = input;
@@ -101,6 +135,7 @@ export function chooseMixPoints(input: MixPointInput): MixPoints {
   const drop = firstDropBar(incoming.phrases);
   const earliest = Math.ceil(outgoing.currentBar + input.leadBars);
   const kickOut = barFlags(outgoing.phrases, outgoing.barCount, (p) => p.hasKick);
+  const bassOut = barFlags(outgoing.phrases, outgoing.barCount, (p) => p.hasBass);
   const kickIn = barFlags(incoming.phrases, incoming.barCount, (p) => p.hasKick);
   const fullIn = barFlags(incoming.phrases, incoming.barCount, (p) => p.hasKick && p.hasBass);
   const exits = energyExits(outgoing.phrases);
@@ -116,43 +151,76 @@ export function chooseMixPoints(input: MixPointInput): MixPoints {
   for (let bar = 0; bar <= lastEntry; bar++) if (onGrid(bar, originIn)) cues.push(bar);
   if (cues.length === 0) cues.push(0);
 
-  let best: (MixPoints & { score: number }) | null = null;
-  for (const overlap of OVERLAP_CHOICES) {
-    if (overlap > input.maxOverlapBars) continue;
-    const latest = outgoing.barCount - overlap;
-    const starts: number[] = [];
-    if (input.timing === 'now') {
-      const entry = nowEntries.find((bar) => bar >= earliest && bar <= latest);
-      if (entry !== undefined) starts.push(entry);
-    } else {
-      for (let bar = latest; bar >= earliest; bar--) if (onGrid(bar, originOut)) starts.push(bar);
-    }
+  type Scored = MixPoints & { score: number };
+  const search = (loop: OutgoingLoop | undefined): Scored | null => {
+    const trackBar = (bar: number) => loopedTrackBar(loop, bar);
+    const kickAt = (bar: number) => !kickOut || kickOut[trackBar(bar)];
+    // The loop runs on until the deck is stopped; the overlap must begin by its first repeat
+    // so that everything before the overlap is the track as it is (countdowns rely on it).
+    const loopEnd = loop ? loop.startBar + loop.bars : Infinity;
+    let best: Scored | null = null;
+    for (const overlap of OVERLAP_CHOICES) {
+      if (overlap > input.maxOverlapBars) continue;
+      if (loop && overlap < LOOP_BELOW_BARS) continue;
+      const latest = loop ? loopEnd : outgoing.barCount - overlap;
+      const starts: number[] = [];
+      if (input.timing === 'now') {
+        const entry = nowEntries.find((bar) => bar >= earliest && bar <= latest);
+        if (entry !== undefined) starts.push(entry);
+        // The first repeat is an entry of its own: the phrase starts over there.
+        if (loop && loopEnd >= earliest && entry !== loopEnd) starts.push(loopEnd);
+      } else {
+        for (let bar = latest; bar >= earliest; bar--) if (onGrid(bar, originOut)) starts.push(bar);
+      }
 
-    for (const start of starts) {
-      const timing =
-        input.timing === 'now' ? LATE_WEIGHT * (start - (firstEntry ?? start)) : EARLY_WEIGHT * (latest - start);
-      for (const cue of cues) {
-        for (const swap of swapCandidates(overlap, cue, entries, start, exits)) {
-          let score = LENGTH_WEIGHT * overlap - timing - SKIP_WEIGHT * Math.max(0, cue - drop);
-          // Before the swap the outgoing kick carries the beat; the incoming carries it after,
-          // and should have a groove to enter on before.
-          score -= BEATLESS_WEIGHT * countFalse(kickOut, start, swap) ** 2;
-          score -= BEATLESS_WEIGHT * countFalse(kickIn, cue, overlap) ** 2;
-          score -= HEADLESS_WEIGHT * countTrue(fullIn, cue, swap) ** 2;
-          const swapBar = cue + swap;
-          if (entries.includes(swapBar)) score += DROP_ON_SWAP;
-          else {
-            const next = entries.find((bar) => bar > swapBar);
-            if (next !== undefined) score -= DROP_DELAY_WEIGHT * (next - swapBar);
-          }
-          if (exits.includes(start + swap)) score += NATURAL_SWAP;
-          if (!best || score > best.score) {
-            best = { overlapBars: overlap, outgoingStartBar: start, incomingStartBar: cue, bassSwapBar: swap, score };
+      for (const start of starts) {
+        const wraps = loopWrapsBy(loop, start + overlap - 1);
+        if (wraps > MAX_LOOP_WRAPS) continue;
+        const timing =
+          input.timing === 'now' ? LATE_WEIGHT * (start - (firstEntry ?? start)) : EARLY_WEIGHT * (latest - start);
+        for (const cue of cues) {
+          for (const swap of swapCandidates(overlap, cue, entries, start, exits)) {
+            let score = LENGTH_WEIGHT * overlap - timing - SKIP_WEIGHT * Math.max(0, cue - drop);
+            // Before the swap the outgoing kick carries the beat; the incoming carries it after,
+            // and should have a groove to enter on before.
+            let beatless = 0;
+            for (let bar = start; bar < start + swap; bar++) if (!kickAt(bar)) beatless++;
+            score -= BEATLESS_WEIGHT * beatless ** 2;
+            score -= BEATLESS_WEIGHT * countFalse(kickIn, cue, overlap) ** 2;
+            score -= HEADLESS_WEIGHT * countTrue(fullIn, cue, swap) ** 2;
+            const swapBar = cue + swap;
+            if (entries.includes(swapBar)) score += DROP_ON_SWAP;
+            else {
+              const next = entries.find((bar) => bar > swapBar);
+              if (next !== undefined) score -= DROP_DELAY_WEIGHT * (next - swapBar);
+            }
+            // The outgoing low end leaves by itself only where the track still runs its course.
+            if (loopWrapsBy(loop, start + swap) === 0 && exits.includes(start + swap)) score += NATURAL_SWAP;
+            if (loop) {
+              score -= LOOP_WRAP_WEIGHT * wraps;
+              if (bassOut && countTrue(bassOut, loop.startBar, loop.bars) === loop.bars) score += LOOP_BASS_BONUS;
+            }
+            if (!best || score > best.score) {
+              best = { overlapBars: overlap, outgoingStartBar: start, incomingStartBar: cue, bassSwapBar: swap, score };
+              if (loop) best.outgoingLoop = loop;
+            }
           }
         }
       }
     }
+    return best;
+  };
+
+  let best = search(undefined);
+  if (!best || best.overlapBars < LOOP_BELOW_BARS) {
+    // Loop candidates: one phrase on the outgoing grid, kick throughout, still ahead of the
+    // deck (its end is where the first jump back happens) and inside the track.
+    for (const loop of loopCandidates(outgoing.barCount, originOut, earliest, kickOut)) {
+      const looped = search(loop);
+      if (looped && (!best || looped.score > best.score)) best = looped;
+    }
   }
+
   if (best) {
     // A short pickup before the incoming track's first phrase line (a bar or two of intro)
     // comes along: both tracks start that much earlier, so the phrase lines still coincide.
@@ -165,6 +233,7 @@ export function chooseMixPoints(input: MixPointInput): MixPoints {
       outgoingStartBar: best.outgoingStartBar - pickup,
       incomingStartBar: best.incomingStartBar - pickup,
       bassSwapBar: best.bassSwapBar + pickup,
+      ...(best.outgoingLoop ? { outgoingLoop: best.outgoingLoop } : {}),
     };
   }
 
@@ -182,6 +251,17 @@ export function chooseMixPoints(input: MixPointInput): MixPoints {
     if (cut >= outgoing.barCount) cut = Math.min(Math.max(earliest, 0), Math.max(0, outgoing.barCount - 1));
   }
   return { overlapBars: 0, outgoingStartBar: cut, incomingStartBar: drop, bassSwapBar: 0 };
+}
+
+/** Phrases of the outgoing track that can be looped, latest first. None without kick information. */
+function loopCandidates(barCount: number, origin: number, earliest: number, kick: boolean[] | null): OutgoingLoop[] {
+  if (!kick) return [];
+  const loops: OutgoingLoop[] = [];
+  for (let start = barCount - PHRASE_BARS; start >= 0; start--) {
+    if (!onGrid(start, origin) || start + PHRASE_BARS < earliest) continue;
+    if (countTrue(kick, start, PHRASE_BARS) === PHRASE_BARS) loops.push({ startBar: start, bars: PHRASE_BARS });
+  }
+  return loops;
 }
 
 /**

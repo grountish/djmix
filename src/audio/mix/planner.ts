@@ -1,7 +1,7 @@
 import { toCamelot, type MusicalKey } from '../analysis/key';
 import type { AudioAnalysis, TrackKey } from '../analysis/types';
 import { bestKeyShift, harmonicScore, MIN_KEY_SHIFT_CONFIDENCE, transpose } from './harmonic';
-import { chooseMixPoints, type MixTiming } from './mixPoints';
+import { chooseMixPoints, type MixTiming, type OutgoingLoop } from './mixPoints';
 import { DEFAULT_TEMPO_POLICY, planTempo, type TempoPlan, type TempoPolicy } from './tempoPlan';
 import { blendTemplate, cutTemplate, type Lane } from './templates';
 import { trackClock } from './trackClock';
@@ -57,6 +57,11 @@ export interface TransitionPlan {
   /** Incoming bar playing when the overlap starts. */
   incomingStartBar: number;
   bassSwapBar: number;
+  /**
+   * A phrase the outgoing track repeats until it is stopped, when it hasn't the bars left for
+   * the blend; outgoing bars above count along the looped timeline.
+   */
+  outgoingLoop?: OutgoingLoop;
   /** Key-lock pitch shift for the incoming track. */
   incomingSemitones: number;
   harmonic: { score: number; outgoingKey: string; incomingKey: string };
@@ -105,6 +110,7 @@ export function planTransition(input: PlanInput): TransitionPlan {
     outgoingRampStartBar: points.outgoingStartBar - (blend ? tempo.outgoingRampBars : 0),
     incomingStartBar: points.incomingStartBar,
     bassSwapBar: points.bassSwapBar,
+    ...(blend && points.outgoingLoop ? { outgoingLoop: points.outgoingLoop } : {}),
     incomingSemitones: shift,
     harmonic: { score, outgoingKey: toCamelot(outgoingKey), incomingKey: toCamelot(incomingKey) },
     lanes: blend ? blendTemplate(points.overlapBars, points.bassSwapBar) : cutTemplate(),

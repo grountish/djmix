@@ -3,6 +3,7 @@ import { filterKnobToCutoffs } from '../engine/curves';
 import type { DeckPlayer } from '../engine/deckPlayer';
 import { type DeckId, type MixGraph, setCrossfaderPosition, setParamSmooth } from '../engine/mixGraph';
 import { STRETCH_LEAD } from '../engine/stretch';
+import { loopedTrackBar } from './mixPoints';
 import type { TransitionPlan } from './planner';
 import { eqDbToGain, interpolate, type Lane, type LaneControl, type LaneTarget, laneValueAt } from './templates';
 
@@ -14,9 +15,13 @@ export interface RunnerDeck {
 
 interface Command {
   at: number;
-  /** 'started' / 'stop' fire once the clock passes `at`; 'rate' goes out ahead of it. */
-  kind: 'rate' | 'stop' | 'started';
+  /**
+   * 'started' / 'stop' fire once the clock passes `at`; 'rate' and 'jump' (back to the loop
+   * start, with the rate from then on) go out ahead of it.
+   */
+  kind: 'rate' | 'jump' | 'stop' | 'started';
   rate?: number;
+  trackTime?: number;
 }
 
 /** Where every automated control stands, per deck, in the lanes' own units. */
@@ -103,7 +108,10 @@ export class TransitionRunner {
     return values;
   }
 
-  /** Clock time of an outgoing beat (beat 0 = its first downbeat), once started. */
+  /**
+   * Clock time of an outgoing beat (beat 0 = its first downbeat), once started. With a loop
+   * the beats count along the looped timeline (see OutgoingLoop).
+   */
   outgoingBeatTime(beat: number): number | undefined {
     return this.outgoingBeats.get(beat);
   }
@@ -131,7 +139,9 @@ export class TransitionRunner {
           else this.events.onIncomingStarted?.();
         } else {
           if (command.at - now > SEND_AHEAD || now < this.pendingUntil[deck]) break;
-          this.deckFor(deck).player.scheduleRate(command.at, command.rate!);
+          const player = this.deckFor(deck).player;
+          if (command.kind === 'jump') player.scheduleJump(command.at, command.trackTime!, command.rate!);
+          else player.scheduleRate(command.at, command.rate!);
           this.pendingUntil[deck] = command.at;
         }
         queue.shift();
@@ -156,13 +166,21 @@ export class TransitionRunner {
     return target === 'outgoing' ? this.outgoing : this.incoming;
   }
 
-  /** Clock time of every outgoing beat up to the overlap end, with its tempo ramp. */
+  /**
+   * Clock time of every outgoing beat up to the overlap end, with its tempo ramp. With a loop
+   * the beats run along the looped timeline: each time it reaches the loop's end the deck is
+   * sent back to the loop's start (a 'jump', which carries the rate from then on).
+   */
   private buildOutgoingTimeline(
     anchor: { ctxTime: number; trackTime: number; rate: number },
     startBeat: number,
     endBeat: number,
   ): void {
     const clock = this.outgoing.clock;
+    const loop = this.plan.outgoingLoop;
+    const trackBeat = (beat: number) => loopedTrackBar(loop, beat / 4) * 4;
+    const loopEndBeat = loop ? (loop.startBar + loop.bars) * 4 : Infinity;
+    const wrapsAt = (beat: number) => beat >= loopEndBeat && (beat - loopEndBeat) % (loop!.bars * 4) === 0;
     const rampStart = this.plan.outgoingRampStartBar * 4;
     const from = anchor.rate;
     const to = this.plan.tempo.outgoingRate;
@@ -178,11 +196,15 @@ export class TransitionRunner {
     for (; beat <= endBeat + 1; beat++) {
       this.outgoingBeats.set(beat, time);
       const next = rateFor(beat);
-      if (beat <= endBeat && Math.abs(next - rate) > RATE_EPSILON) {
+      const playing = trackBeat(beat);
+      if (beat < endBeat && wrapsAt(beat)) {
+        this.queues.outgoing.push({ at: time, kind: 'jump', trackTime: clock.timeOf(playing), rate: next });
+        rate = next;
+      } else if (beat <= endBeat && Math.abs(next - rate) > RATE_EPSILON) {
         this.queues.outgoing.push({ at: time, kind: 'rate', rate: next });
         rate = next;
       }
-      time += (clock.timeOf(beat + 1) - clock.timeOf(beat)) / rate;
+      time += (clock.timeOf(playing + 1) - clock.timeOf(playing)) / rate;
     }
   }
 

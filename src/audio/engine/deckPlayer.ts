@@ -175,6 +175,57 @@ export class DeckPlayer {
     return at;
   }
 
+  /**
+   * Moves the playhead to `trackTime` at audio-clock time `time` (a loop's jump back), with
+   * `rate` from then on; returns the time used, aligned like scheduleRate. Unlike seek() the
+   * handover is exact and the playhead math stays right until it happens.
+   */
+  scheduleJump(time: number, trackTime: number, rate: number = this.rate): number {
+    const at = alignToRenderQuantum(time, this.ctx.sampleRate);
+    const target = clamp(trackTime, 0, this.duration);
+    this.rate = rate;
+    if (!this.playing) {
+      this.pausedAt = target;
+      return at;
+    }
+
+    const now = this.ctx.currentTime;
+    while (this.anchors.length > 1 && this.anchors[1].ctxTime <= now) this.anchors.shift();
+    const last = this.anchors[this.anchors.length - 1];
+    const anchor = { ctxTime: Math.max(at, last.ctxTime), trackTime: target, rate };
+    if (anchor.ctxTime === last.ctxTime) this.anchors[this.anchors.length - 1] = anchor;
+    else this.anchors.push(anchor);
+
+    if (this.keyLock && this.stretch) {
+      this.scheduleStretch({ at: anchor.ctxTime, input: target, rate });
+      this.watchEnd();
+      return at;
+    }
+
+    // Buffer path: a second source takes over at the same instant.
+    const old = this.source;
+    if (old) {
+      old.onended = null;
+      try {
+        old.stop(anchor.ctxTime);
+      } catch {
+        // Already stopped
+      }
+    }
+    const source = this.ctx.createBufferSource();
+    source.buffer = this.buffer;
+    source.playbackRate.value = rate;
+    source.connect(this.output);
+    source.onended = () => {
+      if (this.source !== source) return;
+      this.source = null;
+      this.finish();
+    };
+    source.start(anchor.ctxTime, target);
+    this.source = source;
+    return at;
+  }
+
   /** Key lock keeps pitch while the tempo changes; needs a stretch factory. */
   setKeyLock(enabled: boolean): void {
     if (enabled === this.keyLock) return;

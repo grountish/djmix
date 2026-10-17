@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Phrase, PhraseLabel } from '../analysis/types';
-import { chooseMixPoints } from './mixPoints';
+import { chooseMixPoints, loopedTrackBar, loopWrapsBy } from './mixPoints';
 
 type Section = [PhraseLabel, number] | [PhraseLabel, number, { kick?: boolean; bass?: boolean }];
 
@@ -143,5 +143,56 @@ describe('chooseMixPoints', () => {
     expect(points.overlapBars).toBe(32);
     expect(points.incomingStartBar).toBe(0);
     expect(points.bassSwapBar).toBe(8);
+  });
+
+  describe('looping the outgoing track', () => {
+    it('never loops when a 16-bar blend fits', () => {
+      expect(chooseMixPoints(input).outgoingLoop).toBeUndefined();
+      const late = chooseMixPoints({ ...input, outgoing: { ...input.outgoing, currentBar: 150 } });
+      expect(late.overlapBars).toBe(16);
+      expect(late.outgoingLoop).toBeUndefined();
+    });
+
+    it('loops the last kick phrase for a 16-bar blend when only 8 bars would fit', () => {
+      // Bar 158 + 5 lead = 163: the track (176 bars) has 13 left, an 8-bar blend at 168 at best.
+      const points = chooseMixPoints({ ...input, outgoing: { ...input.outgoing, currentBar: 158 } });
+      expect(points.overlapBars).toBe(16);
+      expect(points.outgoingLoop).toEqual({ startBar: 168, bars: 8 });
+      // The overlap begins on the last phrase, which then repeats once under the blend.
+      expect(points.outgoingStartBar).toBe(168);
+      // The incoming drop still lands on the swap.
+      expect(points.incomingStartBar + points.bassSwapBar).toBe(16);
+    });
+
+    it('loops for Mix now too', () => {
+      const points = chooseMixPoints({ ...input, timing: 'now', outgoing: { ...input.outgoing, currentBar: 158 } });
+      expect(points.overlapBars).toBeGreaterThanOrEqual(16);
+      expect(points.outgoingLoop).toEqual({ startBar: 168, bars: 8 });
+    });
+
+    it('only loops phrases with a kick, still ahead of the deck', () => {
+      // A 24-bar beatless outro: the kick phrases end at 160, behind a deck at 162.
+      const outgoing = phrases(['intro', 16], ['drop', 64], ['breakdown', 16], ['drop', 64], ['outro', 24, { kick: false }]);
+      const points = chooseMixPoints({ ...input, outgoing: { phrases: outgoing, barCount: 184, currentBar: 162 } });
+      expect(points.outgoingLoop).toBeUndefined();
+    });
+
+    it('never loops without kick information', () => {
+      const flat = (p: Phrase) => ({ ...p, hasKick: false, hasBass: false });
+      const points = chooseMixPoints({
+        ...input,
+        outgoing: { phrases: OUTGOING.map(flat), barCount: 176, currentBar: 158 },
+        incoming: { phrases: INCOMING.map(flat), barCount: 96 },
+      });
+      expect(points.outgoingLoop).toBeUndefined();
+    });
+
+    it('maps the looped timeline back onto the track', () => {
+      const loop = { startBar: 24, bars: 8 };
+      expect([20, 24, 31, 32, 39, 40, 47].map((bar) => loopedTrackBar(loop, bar))).toEqual([20, 24, 31, 24, 31, 24, 31]);
+      expect([20, 31, 32, 39, 40, 48].map((bar) => loopWrapsBy(loop, bar))).toEqual([0, 0, 1, 1, 2, 3]);
+      expect(loopedTrackBar(undefined, 99)).toBe(99);
+      expect(loopWrapsBy(undefined, 99)).toBe(0);
+    });
   });
 });
