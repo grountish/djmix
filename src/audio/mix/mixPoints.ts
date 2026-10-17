@@ -23,6 +23,11 @@ export interface MixPointInput {
    * that can be reached (Mix now).
    */
   timing?: MixTiming;
+  /**
+   * The user's choice of outgoing bar for the incoming track to enter on. Used when it can
+   * still be reached and leaves room for a blend; otherwise ignored.
+   */
+  startBar?: number;
 }
 
 export type MixTiming = 'now' | 'end';
@@ -151,6 +156,8 @@ export function chooseMixPoints(input: MixPointInput): MixPoints {
   for (let bar = 0; bar <= lastEntry; bar++) if (onGrid(bar, originIn)) cues.push(bar);
   if (cues.length === 0) cues.push(0);
 
+  const forcedStart = input.startBar !== undefined && input.startBar >= earliest ? input.startBar : undefined;
+
   type Scored = MixPoints & { score: number };
   const search = (loop: OutgoingLoop | undefined): Scored | null => {
     const trackBar = (bar: number) => loopedTrackBar(loop, bar);
@@ -164,7 +171,9 @@ export function chooseMixPoints(input: MixPointInput): MixPoints {
       if (loop && overlap < LOOP_BELOW_BARS) continue;
       const latest = loop ? loopEnd : outgoing.barCount - overlap;
       const starts: number[] = [];
-      if (input.timing === 'now') {
+      if (forcedStart !== undefined) {
+        if (forcedStart <= latest) starts.push(forcedStart);
+      } else if (input.timing === 'now') {
         const entry = nowEntries.find((bar) => bar >= earliest && bar <= latest);
         if (entry !== undefined) starts.push(entry);
         // The first repeat is an entry of its own: the phrase starts over there.

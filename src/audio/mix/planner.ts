@@ -42,6 +42,8 @@ export interface PlanInput {
   incoming: { analysis: AudioAnalysis; bpm?: number };
   /** 'end' (default): where the outgoing track runs out. 'now': the next 16/32-bar entry. */
   timing?: MixTiming;
+  /** The user's choice of outgoing bar for the overlap to start on (see MixPointInput). */
+  startBar?: number;
   policy?: Partial<PlanPolicy>;
 }
 
@@ -91,6 +93,7 @@ export function planTransition(input: PlanInput): TransitionPlan {
     leadBars: tempo.outgoingRampBars + SCHEDULING_LEAD_BARS,
     maxOverlapBars: tempo.canBlend ? policy.maxOverlapBars : 0,
     timing: input.timing,
+    startBar: input.startBar,
   });
 
   const blend = tempo.canBlend && points.overlapBars > 0;

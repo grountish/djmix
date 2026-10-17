@@ -145,6 +145,23 @@ describe('chooseMixPoints', () => {
     expect(points.bassSwapBar).toBe(8);
   });
 
+  describe('a chosen start bar', () => {
+    it('starts the overlap there when it can be reached and leaves room', () => {
+      const points = chooseMixPoints({ ...input, startBar: 112 });
+      expect(points.outgoingStartBar).toBe(112);
+      expect(points.overlapBars).toBe(32);
+      // The swap still lands on the incoming drop.
+      expect(points.incomingStartBar + points.bassSwapBar).toBe(16);
+    });
+
+    it('shortens the blend when the bar is close to the end, and ignores one behind the deck', () => {
+      expect(chooseMixPoints({ ...input, startBar: 160 }).outgoingStartBar).toBe(160);
+      expect(chooseMixPoints({ ...input, startBar: 160 }).overlapBars).toBe(16);
+      // Bar 10 is behind the deck (bar 20 + 5 lead): back to the planner's own choice.
+      expect(chooseMixPoints({ ...input, startBar: 10 })).toEqual(chooseMixPoints(input));
+    });
+  });
+
   describe('looping the outgoing track', () => {
     it('never loops when a 16-bar blend fits', () => {
       expect(chooseMixPoints(input).outgoingLoop).toBeUndefined();
