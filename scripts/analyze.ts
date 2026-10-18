@@ -51,10 +51,10 @@ async function main(): Promise<void> {
     try {
       const buffer = await decode(file);
       const channels = Array.from({ length: buffer.numberOfChannels }, (_, c) => buffer.getChannelData(c));
-      const started = Date.now();
-      const analysis = analyzeAudio(channels, buffer.sampleRate);
-      const elapsed = Date.now() - started;
       const tags = (await parseFile(file, { skipCovers: true })).common;
+      const started = Date.now();
+      const analysis = analyzeAudio(channels, buffer.sampleRate, { bpm: tags.bpm });
+      const elapsed = Date.now() - started;
       const tagKey = keyFromTag(tags.key as string | undefined)?.camelot ?? '-';
       results[basename(file)] = analysis;
       console.log(

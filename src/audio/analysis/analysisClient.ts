@@ -1,10 +1,11 @@
 import { analyzeAudio } from './analyzeAudio';
-import type { AudioAnalysis } from './types';
+import type { AnalysisHints, AudioAnalysis } from './types';
 
 export interface AnalysisRequest {
   id: number;
   channels: Float32Array[];
   sampleRate: number;
+  hints?: AnalysisHints;
 }
 
 export type AnalysisResponse =
@@ -56,18 +57,18 @@ function getWorker(): Worker | null {
 
 function runOnMainThread({ request, resolve, reject }: PendingRequest): void {
   try {
-    resolve(analyzeAudio(request.channels, request.sampleRate));
+    resolve(analyzeAudio(request.channels, request.sampleRate, request.hints));
   } catch (error) {
     reject(error instanceof Error ? error : new Error(String(error)));
   }
 }
 
-/** Analyses a decoded track off the main thread. */
-export function analyzeAudioBuffer(buffer: AudioBuffer): Promise<AudioAnalysis> {
+/** Analyses a decoded track off the main thread; `hints` is what the file's tags say. */
+export function analyzeAudioBuffer(buffer: AudioBuffer, hints: AnalysisHints = {}): Promise<AudioAnalysis> {
   // Posting clones the channel data; nothing is transferred, so a main-thread fallback can
   // still read the same arrays.
   const channels = Array.from({ length: buffer.numberOfChannels }, (_, c) => buffer.getChannelData(c));
-  const request: AnalysisRequest = { id: nextId++, channels, sampleRate: buffer.sampleRate };
+  const request: AnalysisRequest = { id: nextId++, channels, sampleRate: buffer.sampleRate, hints };
 
   return new Promise((resolve, reject) => {
     const entry = { request, resolve, reject };

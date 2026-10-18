@@ -56,7 +56,7 @@ export function App() {
 
       try {
         const audioBuffer = track._audioBuffer || (await decodeAudioFile(track.filePath));
-        const result = await analyzeAudioBuffer(audioBuffer);
+        const result = await analyzeAudioBuffer(audioBuffer, { bpm: track.tagBpm });
         const fingerprint = createFileFingerprint(track);
         const cacheKey = fingerprintToKey(fingerprint);
         const analysis = withTaggedKey({ ...result, analyzedAt: new Date().toISOString(), cacheKey }, track);

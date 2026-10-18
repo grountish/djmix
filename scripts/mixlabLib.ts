@@ -40,14 +40,18 @@ export async function decodeFile(file: string): Promise<AudioBuffer> {
   return ctx.decodeAudioData(data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength));
 }
 
-/** Decodes and analyses a file; a key tag in the file is preferred over detection, as in the app. */
+/**
+ * Decodes and analyses a file as the app does: the tagged tempo settles the octave, a key tag
+ * is preferred over detection.
+ */
 export async function loadTrack(file: string, analysis?: AudioAnalysis): Promise<LoadedTrack> {
   const buffer = await decodeFile(file);
   let result = analysis;
   if (!result) {
     const channels = Array.from({ length: buffer.numberOfChannels }, (_, c) => buffer.getChannelData(c));
-    result = analyzeAudio(channels, buffer.sampleRate);
-    const tagged = keyFromTag((await parseFile(file, { skipCovers: true })).common.key as string | undefined);
+    const tags = (await parseFile(file, { skipCovers: true })).common;
+    result = analyzeAudio(channels, buffer.sampleRate, { bpm: tags.bpm });
+    const tagged = keyFromTag(tags.key as string | undefined);
     if (tagged) result = { ...result, key: tagged };
   }
   return { file, name: basename(file), buffer, analysis: result };

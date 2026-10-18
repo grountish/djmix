@@ -1,5 +1,11 @@
 /** Bumped whenever analysis output changes, so cached results are recomputed. */
-export const ANALYZER_VERSION = 7;
+export const ANALYZER_VERSION = 8;
+
+/** What is known about a track before it is analysed (its file tags). */
+export interface AnalysisHints {
+  /** Tempo tagged in the file; settles the octave of the estimate (see `applyTempoHint`). */
+  bpm?: number;
+}
 
 export type PhraseLabel = 'intro' | 'build' | 'drop' | 'breakdown' | 'outro';
 

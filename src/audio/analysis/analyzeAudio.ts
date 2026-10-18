@@ -6,17 +6,20 @@ import { downsampleForAnalysis, toMono } from './dsp';
 import { measureLoudness } from './loudness';
 import { computeSpectralFeatures } from './spectrum';
 import { analyzeStructure } from './structure';
-import { estimateTempo } from './tempo';
-import { ANALYZER_VERSION, type AudioAnalysis } from './types';
+import { applyTempoHint, estimateTempo } from './tempo';
+import { ANALYZER_VERSION, type AnalysisHints, type AudioAnalysis } from './types';
 
-/** Full track analysis from raw channel data. Pure and synchronous: runs in a worker or Node. */
-export function analyzeAudio(channels: Float32Array[], sampleRate: number): AudioAnalysis {
+/**
+ * Full track analysis from raw channel data. Pure and synchronous: runs in a worker or Node.
+ * `hints` carries what the file's tags say (a tagged tempo settles the octave).
+ */
+export function analyzeAudio(channels: Float32Array[], sampleRate: number, hints: AnalysisHints = {}): AudioAnalysis {
   const mono = toMono(channels);
   const duration = mono.length / sampleRate;
   const reduced = downsampleForAnalysis(mono, sampleRate);
   const spectral = computeSpectralFeatures(reduced.samples, reduced.sampleRate);
 
-  const bpmEstimate = estimateTempo(spectral.flux, spectral.sampleRate / spectral.hop);
+  const bpmEstimate = applyTempoHint(estimateTempo(spectral.flux, spectral.sampleRate / spectral.hop), hints.bpm);
   const grid = fitBeatGrid(mono, sampleRate, spectral, bpmEstimate);
   const clock =
     grid.anchors && grid.anchors.length >= 2

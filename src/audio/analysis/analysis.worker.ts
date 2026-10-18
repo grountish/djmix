@@ -7,9 +7,9 @@ const scope = self as unknown as {
 };
 
 scope.onmessage = (event) => {
-  const { id, channels, sampleRate } = event.data;
+  const { id, channels, sampleRate, hints } = event.data;
   try {
-    scope.postMessage({ id, analysis: analyzeAudio(channels, sampleRate) });
+    scope.postMessage({ id, analysis: analyzeAudio(channels, sampleRate, hints) });
   } catch (error) {
     scope.postMessage({ id, error: error instanceof Error ? error.message : String(error) });
   }

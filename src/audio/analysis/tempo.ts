@@ -20,6 +20,32 @@ export function normalizeBpm(bpm: number): number {
   return normalized;
 }
 
+/** A tagged tempo counts as naming an octave of the estimate when it is within this ratio of one. */
+const HINT_TOLERANCE = 0.06;
+
+/**
+ * The octave of `bpm` (half, as is, double) that a tagged tempo names, when it names one
+ * within the tolerance; otherwise `bpm` unchanged. Octave choice is where the estimate goes
+ * wrong on real tracks (half-time readings of 140–170 BPM material, double-time of slow
+ * house); a tag written by a DAW or a download tool settles it, while a tag at another ratio
+ * (3:2, 4:3: a different rhythm reading) is left alone.
+ */
+export function applyTempoHint(bpm: number, hintBpm: number | undefined): number {
+  if (hintBpm === undefined || !(hintBpm > 0) || !Number.isFinite(hintBpm)) return bpm;
+  let best = bpm;
+  let bestDistance = Infinity;
+  for (const factor of [0.5, 1, 2]) {
+    const candidate = bpm * factor;
+    if (candidate < MIN_BPM / 2 || candidate > MAX_BPM * 2) continue;
+    const distance = Math.abs(Math.log(candidate / hintBpm));
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      best = candidate;
+    }
+  }
+  return bestDistance <= Math.log(1 + HINT_TOLERANCE) ? best : bpm;
+}
+
 /** Coarse tempo (±0.5%) from the autocorrelation of an onset-strength envelope. */
 export function estimateTempo(onset: Float32Array, frameRate: number): number {
   const odf = rectifiedDetrend(onset, Math.round(frameRate));
