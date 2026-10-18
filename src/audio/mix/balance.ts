@@ -81,7 +81,13 @@ const SILENCE_DB = -120;
  * The plan's lanes with the EQ balanced for these two tracks. Cuts and the plan untouched
  * when it isn't a blend.
  */
-export function balancePlan(plan: TransitionPlan, outgoing: AudioAnalysis, incoming: AudioAnalysis): TransitionPlan {
+export function balancePlan(
+  plan: TransitionPlan,
+  outgoing: AudioAnalysis,
+  incoming: AudioAnalysis,
+  /** The trims the decks actually play with (auto trim plus any gain knob); the auto trim when absent. */
+  trims: { outgoing?: number; incoming?: number } = {},
+): TransitionPlan {
   if (plan.kind !== 'blend' || plan.overlapBars <= 0) return plan;
   const { lanes, report } = balanceLanes(plan.lanes, {
     overlapBars: plan.overlapBars,
@@ -89,13 +95,13 @@ export function balancePlan(plan: TransitionPlan, outgoing: AudioAnalysis, incom
     outgoing: {
       bars: outgoing.bars,
       startBar: plan.outgoingStartBar,
-      trimDb: loudnessTrimDb(outgoing.loudness.integratedLufs),
+      trimDb: trims.outgoing ?? loudnessTrimDb(outgoing.loudness.integratedLufs),
       loop: plan.outgoingLoop,
     },
     incoming: {
       bars: incoming.bars,
       startBar: plan.incomingStartBar,
-      trimDb: loudnessTrimDb(incoming.loudness.integratedLufs),
+      trimDb: trims.incoming ?? loudnessTrimDb(incoming.loudness.integratedLufs),
     },
   });
   return { ...plan, lanes, balance: report };

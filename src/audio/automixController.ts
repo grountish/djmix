@@ -79,18 +79,26 @@ export function previewTransition(
 ): TransitionPlan | null {
   const player = getDeckPlayer(outgoingId);
   if (!player.isPlaying) return null;
+  const incomingId: DeckId = outgoingId === 'A' ? 'B' : 'A';
   return planTransition({
     outgoing: {
       analysis: outgoing,
       trackTime: player.currentTime(),
       rate: player.currentRate,
       semitones: player.keyShift,
+      trimDb: deckTrimDb(outgoingId),
     },
-    incoming: { analysis: incoming },
+    incoming: { analysis: incoming, trimDb: deckTrimDb(incomingId) },
     timing,
     startBar,
     policy: planPolicy,
   });
+}
+
+/** The trim a deck plays with right now (auto trim plus the gain knob), read off its input gain. */
+function deckTrimDb(id: DeckId): number {
+  const gain = getMixGraph().decks[id].input.gain.value;
+  return gain > 0 ? 20 * Math.log10(gain) : -60;
 }
 
 /** Seconds until the plan's outgoing tempo ramp (its first audible change) begins. */

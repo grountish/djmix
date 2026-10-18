@@ -43,8 +43,10 @@ export interface PlanInput {
     rate: number;
     /** Pitch shift it already plays with. */
     semitones: number;
+    /** Trim the deck plays with, dB (auto trim plus any gain knob); the auto trim when absent. */
+    trimDb?: number;
   };
-  incoming: { analysis: AudioAnalysis; bpm?: number };
+  incoming: { analysis: AudioAnalysis; bpm?: number; trimDb?: number };
   /** 'end' (default): where the outgoing track runs out. 'now': the next 16/32-bar entry. */
   timing?: MixTiming;
   /** The user's choice of outgoing bar for the overlap to start on (see MixPointInput). */
@@ -95,13 +97,14 @@ export function planTransition(input: PlanInput): TransitionPlan {
 
   const currentBar = trackClock(out, outgoingBpm).beatAt(input.outgoing.trackTime) / 4;
   // Low-band levels as the decks will play them, so the swap can avoid a bass hole.
-  const trimmedLow = (analysis: AudioAnalysis) => {
-    const trim = loudnessTrimDb(analysis.loudness.integratedLufs);
-    return analysis.bars.lowDb.map((db) => db + trim);
+  const trims = {
+    outgoing: input.outgoing.trimDb ?? loudnessTrimDb(out.loudness.integratedLufs),
+    incoming: input.incoming.trimDb ?? loudnessTrimDb(inc.loudness.integratedLufs),
   };
+  const trimmedLow = (analysis: AudioAnalysis, trim: number) => analysis.bars.lowDb.map((db) => db + trim);
   const points = chooseMixPoints({
-    outgoing: { phrases: out.phrases, barCount: out.bars.lowDb.length, lowDb: trimmedLow(out), currentBar },
-    incoming: { phrases: inc.phrases, barCount: inc.bars.lowDb.length, lowDb: trimmedLow(inc) },
+    outgoing: { phrases: out.phrases, barCount: out.bars.lowDb.length, lowDb: trimmedLow(out, trims.outgoing), currentBar },
+    incoming: { phrases: inc.phrases, barCount: inc.bars.lowDb.length, lowDb: trimmedLow(inc, trims.incoming) },
     leadBars: tempo.outgoingRampBars + SCHEDULING_LEAD_BARS,
     maxOverlapBars: tempo.canBlend ? policy.maxOverlapBars : 0,
     timing: input.timing,
@@ -131,7 +134,7 @@ export function planTransition(input: PlanInput): TransitionPlan {
     lanes: blend ? blendTemplate(points.overlapBars, points.bassSwapBar) : cutTemplate(),
     warnings,
   };
-  return policy.balance ? balancePlan(plan, out, inc) : plan;
+  return policy.balance ? balancePlan(plan, out, inc, trims) : plan;
 }
 
 /** ±1 semitone on the incoming track when it turns a clash into a match and both keys are trusted. */

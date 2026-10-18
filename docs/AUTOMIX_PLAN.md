@@ -277,3 +277,41 @@ labels on real arrangements. Deck sync for drifting tracks uses anchors in Phase
 - Per-track corrections (parallel agent): tempo ×2/÷2, grid nudge, downbeat ±1 beat, key override,
   stored on the track and applied via `effectiveAnalysis(track)` everywhere (automix included).
 - Still open: live EQ knob animation during automix, transition timeline view.
+
+### Mix quality pass — done (2026-10-18)
+
+- **Energy-aware EQ (`mix/balance.ts`)**: the planner forecasts both decks' per-band level
+  through the overlap (bar energies + `loudnessTrimDb` + template gains) and corrects the EQ
+  lanes bar by bar. Reference: the outgoing deck as it plays until the bass swap, then a walk
+  from its level there to the incoming track's own level; the incoming leads above the walk
+  after the swap except in the low band, which follows the walk so the bass hands over at one
+  level. Cuts only above unity (+3 dB under the template; the incoming low may be lifted 4 dB
+  after the swap), 2 dB/bar release, incoming back at unity by the end. `plan.balance` carries
+  the forecast; policy flag `balance`.
+- **What real renders showed**: the loudness defect was a *hole at the bass swap* (incoming low
+  through a fader still −6 dB; in one pair at a bar with no bass yet), not stacking. The
+  template now lifts the incoming low by what its fader lacks; mix-point scoring penalises
+  swaps onto a bass hole (trimmed `lowDb`). A one-beat 20 dB low burst at the filter sweep
+  start was the high-pass biquad ramping up from 0 Hz (sub-hertz biquads are ill-conditioned:
+  +45 dB ramping, +150 dB gliding towards 0). The high-pass now only jumps between exact 0 and
+  20 Hz (`settleHighpass`); the filter knob returning to centre had the same latent bug.
+- **Grid-free metrics (`mix/metrics.ts`)**: `kickPhaseOffset` (envelope cross-correlation
+  within ±half the meeting period; a half-beat grid error reads as ±period/2),
+  `bandLevels` + `checkForecast` (render vs forecast; on real pairs within 0.9–1.9 dB RMS;
+  stacking ≤ 3 dB and hole ≤ 6 dB checks). Short-term LU deviation is advisory when a
+  forecast exists: a planned blend walks between two levels. Beat alignment is judged on p95.
+- **Tools**: `npm run mixlab` (`--no-balance`, `--json`, `MIXLAB_DEBUG=1` prints forecast and
+  measured band rows), `npm run mixset -- <folder>` (every adjacent pair of a set, one table
+  row each with flags: timing-disagree, half-beat?, hole, stack, cut, lock-abandoned),
+  "Flag mix" in the footer (last 90 s of the master + plans → `userData/reports/`),
+  `npm run analyze -- <folder> --baseline fixtures/analysis-baseline.json [--update]
+  [--library <track-library.json>]` (what an analyser change moved, tag agreement, which of
+  the user's in-app corrections the analyser still needs).
+- **Analysis**: a tagged tempo settles the octave of the estimate (`applyTempoHint`);
+  `ANALYZER_VERSION = 8`.
+- Flagged for ears from the set: Sunswell → Silk (grid metric sees 10 clear beats; the
+  grid-free offset is ≈ half a beat) and Pantalón → True South (grid 5 ms vs grid-free 12 ms).
+  Renders in `mixlab-out/2026-10-18-balance/`.
+- Open: the manual GAIN offset isn't in the forecast (planner would need the decks' trimDb);
+  structure labels (drop/build) are unverified on real tracks — the baseline harness is where
+  a change shows.
