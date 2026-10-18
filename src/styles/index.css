@@ -267,14 +267,10 @@ select {
   border-color: var(--yellow);
 }
 
-/*
- * The decks row is as tall as the mixer column. The mixer lays its blocks out in two columns
- * (knobs | FX, faders, crossfader, Auto, master), so the row stays around 320 px and the
- * browser below gets the rest of the window.
- */
+/* The decks row is as tall as the mixer column; the browser below gets the rest of the window. */
 .decks {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 340px minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) 252px minmax(0, 1fr);
   gap: 6px;
   padding: 6px;
 }
@@ -715,18 +711,9 @@ select {
 
 /* Mixer */
 .mixer {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  grid-template-areas:
-    'knobs fx'
-    'knobs faders'
-    'knobs xf'
-    'knobs curve'
-    'knobs auto'
-    'knobs master';
-  align-content: start;
-  column-gap: 12px;
-  row-gap: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
   padding: 8px;
   background: var(--panel);
   border: 1px solid var(--line);
@@ -734,37 +721,15 @@ select {
 }
 
 .mixer-knobs {
-  grid-area: knobs;
-  align-self: start;
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding-right: 12px;
-  border-right: 1px solid var(--line);
+  gap: 3px;
 }
 
-.mixer-fx {
-  grid-area: fx;
-}
-
-.mixer-faders {
-  grid-area: faders;
-}
-
-.crossfader {
-  grid-area: xf;
-}
-
-.xf-curve {
-  grid-area: curve;
-}
-
-.mixer-auto {
-  grid-area: auto;
-}
-
-.master {
-  grid-area: master;
+/* Knobs draw at 40 px and are shown a little smaller, to keep the decks row short. */
+.mixer .knob-svg {
+  width: 34px;
+  height: 34px;
 }
 
 .mixer-row {
@@ -849,6 +814,7 @@ select {
   grid-template-columns: 1fr auto 1fr;
   align-items: end;
   gap: 6px;
+  padding-top: 2px;
 }
 
 .channel {
@@ -862,14 +828,14 @@ select {
   display: flex;
   align-items: stretch;
   gap: 5px;
-  height: 88px;
+  height: 96px;
 }
 
 .channel-fader {
   writing-mode: vertical-lr;
   direction: rtl;
   width: 24px;
-  height: 88px;
+  height: 96px;
 }
 
 .channel-fader::-webkit-slider-runnable-track {
@@ -887,7 +853,7 @@ select {
 .meter {
   display: block;
   width: 6px;
-  height: 88px;
+  height: 96px;
   border-radius: 1px;
   background: #0d0d0d;
 }
@@ -1553,7 +1519,9 @@ select {
 .mixer-fx {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 3px;
+  padding-top: 4px;
+  border-top: 1px solid var(--line);
 }
 
 .mixer-select {
