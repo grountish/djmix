@@ -70,6 +70,8 @@ export interface PlaybackState {
 
 export interface DeckState {
   track: Track | null;
+  /** The track on its way onto the deck (decoding, waveform), until it lands or fails. */
+  loading: Track | null;
   playback: PlaybackState;
   /** Cue point (track seconds): set by CUE while paused or by Auto when it cues the next track. */
   cuePoint: number | null;

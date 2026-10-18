@@ -86,7 +86,7 @@ export function Deck({
   onLoopDouble,
   onLoopToggle,
 }: DeckProps) {
-  const { track, playback, targetBpm, playbackMode, cuePoint, loop } = state;
+  const { track, playback, targetBpm, playbackMode, cuePoint, loop, loading } = state;
   const [targetBpmInput, setTargetBpmInput] = useState(targetBpm?.toString() || '');
   const [showGrid, setShowGrid] = useState(false);
   const [dragOver, setDragOver] = useState(false);
@@ -166,6 +166,13 @@ export function Deck({
               </div>
               <div className="deck-artist">{track.artist || track.album || ' '}</div>
             </>
+          ) : loading ? (
+            <>
+              <div className="deck-title deck-title-empty" title={loading.fileName}>
+                {loading.title || loading.fileName}
+              </div>
+              <div className="deck-artist">Loading…</div>
+            </>
           ) : (
             <>
               <div className="deck-title deck-title-empty">No track loaded</div>
@@ -212,7 +219,13 @@ export function Deck({
               onSeek={onSeek}
             />
           ) : (
-            <EmptyWaveform />
+            <EmptyWaveform hint={!loading} />
+          )}
+          {loading && (
+            <div className="deck-loading" role="status" aria-live="polite">
+              <span className="spinner" />
+              <span className="deck-loading-text">Loading {loading.title || loading.fileName}</span>
+            </div>
           )}
           <div className="deck-time">
             <span className="time-elapsed">{formatTime(playback.currentTime)}</span>

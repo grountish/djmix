@@ -112,6 +112,7 @@ type Action =
   | { type: 'SET_SORT'; sortOption: SortOption }
   | { type: 'SET_FILTER'; filterOptions: FilterOptions }
   | { type: 'SET_DECK_TRACK'; deck: 'A' | 'B'; track: Track | null }
+  | { type: 'SET_DECK_LOADING'; deck: 'A' | 'B'; track: Track | null }
   | { type: 'SET_DECK_PLAYING'; deck: 'A' | 'B'; isPlaying: boolean }
   | { type: 'SET_DECK_TIME'; deck: 'A' | 'B'; currentTime: number }
   | { type: 'SET_DECK_PLAYBACK_RATE'; deck: 'A' | 'B'; rate: number }
@@ -141,6 +142,7 @@ type Action =
 
 const createInitialDeckState = (): DeckState => ({
   track: null,
+  loading: null,
   playback: {
     isPlaying: false,
     currentTime: 0,
@@ -241,6 +243,12 @@ function reducer(state: AppState, action: Action): AppState {
     case 'SET_FILTER':
       return { ...state, filterOptions: action.filterOptions };
 
+    case 'SET_DECK_LOADING': {
+      const deckKey = action.deck === 'A' ? 'deckA' : 'deckB';
+      if (state[deckKey].loading === action.track) return state;
+      return { ...state, [deckKey]: { ...state[deckKey], loading: action.track } };
+    }
+
     case 'SET_DECK_TRACK': {
       const deckKey = action.deck === 'A' ? 'deckA' : 'deckB';
       return {
@@ -251,6 +259,7 @@ function reducer(state: AppState, action: Action): AppState {
         [deckKey]: {
           ...state[deckKey],
           track: action.track,
+          loading: null,
           cuePoint: null,
           loop: null,
           playback: {
@@ -501,6 +510,8 @@ const LIVE_RATE_STEP = 1e-4;
 export function AppProvider({ children }: { children: React.ReactNode }) {
   const [state, dispatch] = useReducer(reducer, initialState);
   const stateRef = useRef(state);
+  /** Per deck, the number of the latest `loadToDeck` call; older calls stand down. */
+  const loadCounter = useRef<Record<'A' | 'B', number>>({ A: 0, B: 0 });
   stateRef.current = state;
 
   /**
@@ -626,17 +637,28 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     loadToDeck: useCallback(
       async (deck: 'A' | 'B', track: Track & { _audioBuffer?: AudioBuffer }) => {
         releaseAutomix(`deck ${deck} loaded`);
+        // The deck shows the track on its way; a later load on the same deck takes over the
+        // indicator, so a superseded one must not clear it when it finishes.
+        const loadId = ++loadCounter.current[deck];
+        dispatch({ type: 'SET_DECK_LOADING', deck, track });
         let audioBuffer: AudioBuffer | null = null;
-        if (isElectronEnvironment()) {
-          audioBuffer = await decodeAudioFile(track.filePath);
-          await loadAudioBufferToDeck(deck, audioBuffer);
-        } else if (track._audioBuffer) {
-          audioBuffer = track._audioBuffer;
-          await loadAudioBufferToDeck(deck, audioBuffer);
+        let waveform: Awaited<ReturnType<typeof ensureWaveform>>;
+        try {
+          if (isElectronEnvironment()) {
+            audioBuffer = await decodeAudioFile(track.filePath);
+            await loadAudioBufferToDeck(deck, audioBuffer);
+          } else if (track._audioBuffer) {
+            audioBuffer = track._audioBuffer;
+            await loadAudioBufferToDeck(deck, audioBuffer);
+          }
+          // The waveform comes from the cache, else from the audio just decoded.
+          const decoded = audioBuffer;
+          waveform = await ensureWaveform(track, async () => decoded ?? decodeAudioFile(track.filePath));
+        } catch (error) {
+          if (loadCounter.current[deck] === loadId) dispatch({ type: 'SET_DECK_LOADING', deck, track: null });
+          throw error;
         }
-        // The waveform comes from the cache, else from the audio just decoded.
-        const decoded = audioBuffer;
-        const waveform = await ensureWaveform(track, async () => decoded ?? decodeAudioFile(track.filePath));
+        if (loadCounter.current[deck] !== loadId) return;
         const loaded: Track = waveform ? { ...track, ...waveform } : track;
 
         // Reset playback rate to 1 when loading a new track

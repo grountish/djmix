@@ -483,12 +483,13 @@ export function Waveform({
   );
 }
 
-export function EmptyWaveform() {
+/** The empty deck; the hint makes way for the loading indicator. */
+export function EmptyWaveform({ hint = true }: { hint?: boolean }) {
   return (
     <div className="wave">
       <div className="wave-overview wave-empty" />
       <div className="wave-main wave-empty wave-empty-main">
-        <span>Drop a track here, or double-click one in the browser</span>
+        {hint && <span>Drop a track here, or double-click one in the browser</span>}
       </div>
     </div>
   );
