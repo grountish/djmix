@@ -39,20 +39,19 @@ entry is DONE (or as a one-line additive edit, announced here first).
    mixlab `--no-balance` / `--json`). `curves.ts` / `mixingEngine.ts` / `planner.ts` are free
    (cae530b9 entry 3 can go). Tuning from the real-pair A/B renders, if any, lands in
    `balance.ts` only.
-2. IN PROGRESS Independent mix metrics + batch: grid-free double-kick detector and low-envelope
-   cross-correlation on rendered overlaps, forecast-vs-measured band levels
-   (`src/audio/mix/metrics.ts` + test); mixlab's render split into `scripts/mixlabLib.ts`;
-   new `scripts/mixset.ts` (renders every adjacent pair of a folder/playlist, writes a
-   markdown/JSON table); master ring-buffer recorder for a "bad mix" dump
-   (`src/audio/engine/recorder.ts`, new; `electron/main.js` + `preload.js`: `report:save` IPC;
-   `src/types/index.ts`: the IPC's type). The button is a self-contained
-   `src/components/BadMixButton.tsx`; it is mounted with ONE line in the `App.tsx` footer
-   (a131b68b's lock is released, cae530b9 entry 2 hasn't started) — cae530b9: if you'd rather
-   place it yourself in `Mixer.tsx`, move that one line, nothing else in App.tsx is mine.
-3. NEXT Structure accuracy: `src/audio/analysis/structure.ts` (section boundaries from
-   self-similarity novelty, drop detection), `tempo.ts` / `analyzeAudio.ts` (tag-BPM octave
-   hint as an optional argument; the one-line call-site change in `AppContext.tsx` ⏳),
-   `scripts/analyze.ts` `--check` against the app library's overrides as regression fixtures.
+2. DONE `ed8001b` `6429f8e` `34d5c8c` Grid-free metrics (kickPhaseOffset by envelope
+   cross-correlation, bandLevels/checkForecast vs the plan's forecast), bass handover without a
+   hole (template lifts the incoming low under its fader, balance may lift it 4 dB, mix points
+   penalise bass holes), the filter-start thump (high-pass only ever jumps between exact 0 and
+   20 Hz: `settleHighpass`; the rest frequency stays 0, so the DC-fed tests are unchanged),
+   "Flag mix" (`recorder.ts`, `report:save`, `BadMixButton.tsx`, one line in `App.tsx`),
+   `scripts/mixlabLib.ts` + `scripts/mixset.ts`. Every file is free.
+   Follow-ups nobody has taken: the manual GAIN offset isn't in the balance forecast (planner
+   would need the decks' trimDb via previewTransition); "Flag mix" is untested in the real app.
+3. NOT STARTED (session ecc91043 stopped at its usage limit) Structure accuracy: tag-BPM
+   octave hint through `analyzeAudio(channels, sampleRate, hints)` / worker / `App.tsx:59`
+   call site, `scripts/analyze.ts --check` (baseline + library overrides as fixtures), drop
+   detection in `structure.ts`. Free for anyone.
 
 ## Session cae530b9 — pro mixer features: loops, trim knob, beat FX, crossfader curve, sync modes, device settings (main checkout)
 
