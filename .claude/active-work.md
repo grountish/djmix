@@ -47,10 +47,14 @@ entry is DONE (or as a one-line additive edit, announced here first).
    `scripts/mixlabLib.ts` + `scripts/mixset.ts`. Every file is free.
    Follow-ups nobody has taken: the manual GAIN offset isn't in the balance forecast (planner
    would need the decks' trimDb via previewTransition); "Flag mix" is untested in the real app.
-3. NOT STARTED (session ecc91043 stopped at its usage limit) Structure accuracy: tag-BPM
-   octave hint through `analyzeAudio(channels, sampleRate, hints)` / worker / `App.tsx:59`
-   call site, `scripts/analyze.ts --check` (baseline + library overrides as fixtures), drop
-   detection in `structure.ts`. Free for anyone.
+3. DONE `dd3521f` `1e7b559` Tag-BPM octave hint (`analyzeAudio(channels, sampleRate, hints)`,
+   worker, `App.tsx` call site, analyze + mixlab CLIs; ANALYZER_VERSION 8) and the regression
+   harness: `npm run analyze -- <folder> --baseline fixtures/analysis-baseline.json [--update]
+   [--library <track-library.json>]` (changes vs baseline, tag agreement, which in-app
+   corrections the analyser still needs); baseline committed for the 42-track set. The
+   forecast now reads the decks' actual trims (GAIN knob included). Not done: drop/build label
+   work in `structure.ts` (nothing to verify it against yet; the harness is where it shows).
+   Session ecc91043 finished; every file is free.
 
 ## Session cae530b9 — pro mixer features: loops, trim knob, beat FX, crossfader curve, sync modes, device settings (main checkout)
 
