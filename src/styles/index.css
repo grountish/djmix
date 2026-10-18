@@ -147,6 +147,9 @@ select {
 /* Layout */
 .app {
   display: grid;
+  /* The one column is capped at the window: an implicit `auto` column would grow to the top
+     bar's min-content width (a long mix status) and push the whole page wider than the screen. */
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: 34px auto minmax(0, 1fr) 22px;
   height: 100vh;
   overflow: hidden;
@@ -157,6 +160,8 @@ select {
   display: flex;
   align-items: center;
   gap: 14px;
+  min-width: 0;
+  overflow: hidden;
   padding: 0 10px;
   background: var(--panel);
   border-bottom: 1px solid var(--line);
