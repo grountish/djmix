@@ -10,6 +10,12 @@ https://miltonmannarino.github.io/djmix-features/ — what changed, how to test,
 Shared dev server: Vite on :5173 (+ Electron). The live tests (`npm run test:live`) start their
 own Vite on :5174 with HMR off, so edits don't reload the page under a running test.
 
+## Session 91b26f74 — Auto mixes out at the end of the track — DONE `e49d972` (2026-10-19)
+
+`chooseMixPoints` ('end'): the overlap ends within a phrase of the outgoing track's end
+(`END_SLACK_BARS`), `EARLY_WEIGHT` 0.5 (not for loops), Auto's loop is the last kick phrase and
+the blend must reach it. Mix now unchanged. Every file is free.
+
 ## Session 91b26f74 — deck loading indicator — DONE `2a65f6e` (2026-10-19)
 
 `DeckState.loading` (the track on its way), `SET_DECK_LOADING` around `loadToDeck` (a later
