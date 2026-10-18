@@ -112,8 +112,18 @@ const DROP_ON_SWAP = 10;
 const NATURAL_SWAP = 6;
 /** Longer blends are smoother: half a point per bar. */
 const LENGTH_WEIGHT = 0.5;
-/** Auto: mixing earlier than the latest possible point wastes the outgoing track, a little. */
-const EARLY_WEIGHT = 0.15;
+/**
+ * Auto: the blend ends where the outgoing track ends, give or take a phrase. The track is
+ * heard to its end: an exit at an earlier breakdown may be smoother, but it leaves the last
+ * drop unplayed (a minute of the track, on real tracks).
+ */
+const END_SLACK_BARS = PHRASE_BARS;
+/**
+ * Auto: per bar the blend ends before the track does; a phrase early needs a reason (a drop
+ * on the swap, a natural exit, a beat under the blend). Not for a looped outro: the loop is
+ * the track's end, and its repeats are counted separately.
+ */
+const EARLY_WEIGHT = 0.5;
 /** Mix now: a later entry than the next one needs a good reason. */
 const LATE_WEIGHT = 1;
 /** Per bar the incoming drop comes after the swap: the energy should carry on, not wait. */
@@ -149,9 +159,10 @@ const BASS_HOLE_BARS = 2;
  * Where to mix. Both tracks change on their phrase grids at the same moment. Every
  * combination of overlap length, outgoing start, incoming cue and bass-swap bar is scored:
  * both tracks should have their kick before the swap, the incoming drop should land on the
- * swap (or failing that the outgoing bass should leave there), longer is better, and for Auto
- * later is better while Mix now wants the next entry. When the outgoing track hasn't the bars
- * left for a 16-bar blend, one of its kick phrases is looped to make them.
+ * swap (or failing that the outgoing bass should leave there), longer is better, Auto ends the
+ * blend within a phrase of the track's end while Mix now wants the next entry. When the
+ * outgoing track hasn't the bars left for a 16-bar blend, one of its kick phrases is looped to
+ * make them.
  */
 export function chooseMixPoints(input: MixPointInput): MixPoints {
   const { outgoing, incoming } = input;
@@ -200,14 +211,19 @@ export function chooseMixPoints(input: MixPointInput): MixPoints {
         // The first repeat is an entry of its own: the phrase starts over there.
         if (loop && loopEnd >= earliest && entry !== loopEnd) starts.push(loopEnd);
       } else {
-        for (let bar = latest; bar >= earliest; bar--) if (onGrid(bar, originOut)) starts.push(bar);
+        // Auto: the track plays to its end (a looped phrase is its end). The deck's own outro
+        // or last drop is what the incoming track comes in over.
+        const earliestStart = loop ? earliest : Math.max(earliest, outgoing.barCount - overlap - END_SLACK_BARS);
+        for (let bar = latest; bar >= earliestStart; bar--) if (onGrid(bar, originOut)) starts.push(bar);
       }
 
       for (const start of starts) {
+        // The blend reaches the loop (else it is a plain blend, and those were searched) and
+        // doesn't outstay it.
         const wraps = loopWrapsBy(loop, start + overlap - 1);
-        if (wraps > MAX_LOOP_WRAPS) continue;
+        if (loop && (wraps === 0 || wraps > MAX_LOOP_WRAPS)) continue;
         const timing =
-          input.timing === 'now' ? LATE_WEIGHT * (start - (firstEntry ?? start)) : EARLY_WEIGHT * (latest - start);
+          input.timing === 'now' ? LATE_WEIGHT * (start - (firstEntry ?? start)) : loop ? 0 : EARLY_WEIGHT * (latest - start);
         for (const cue of cues) {
           for (const swap of swapCandidates(overlap, cue, entries, start, exits)) {
             let score = LENGTH_WEIGHT * overlap - timing - SKIP_WEIGHT * Math.max(0, cue - drop);
@@ -245,8 +261,10 @@ export function chooseMixPoints(input: MixPointInput): MixPoints {
   let best = search(undefined);
   if (!best || best.overlapBars < LOOP_BELOW_BARS) {
     // Loop candidates: one phrase on the outgoing grid, kick throughout, still ahead of the
-    // deck (its end is where the first jump back happens) and inside the track.
-    for (const loop of loopCandidates(outgoing.barCount, originOut, earliest, kickOut)) {
+    // deck (its end is where the first jump back happens) and inside the track. For Auto it is
+    // the track's last phrase: a loop stands in for the end, not for the rest of the track.
+    const minLoopEnd = input.timing === 'now' ? 0 : outgoing.barCount - END_SLACK_BARS;
+    for (const loop of loopCandidates(outgoing.barCount, originOut, Math.max(earliest, minLoopEnd), kickOut)) {
       const looped = search(loop);
       if (looped && (!best || looped.score > best.score)) best = looped;
     }

@@ -145,6 +145,51 @@ describe('chooseMixPoints', () => {
     expect(points.incomingStartBar).toBeLessThanOrEqual(25);
   });
 
+  describe('the outgoing track is heard to its end (Auto)', () => {
+    it('does not mix out at a breakdown a minute before the end, however smooth the exit', () => {
+      // A 40-bar kickless breakdown, a final 16-bar drop and a bar of tail (a real library
+      // track): swapping where the kick leaves at bar 104 would be the smoothest exit, but it
+      // would leave the last minute of the track unplayed.
+      const outgoing = phrases(['intro', 16], ['drop', 88], ['breakdown', 40, { kick: false, bass: true }], ['drop', 16], ['outro', 1, { kick: false }]);
+      const points = chooseMixPoints({ ...input, outgoing: { phrases: outgoing, barCount: 161, currentBar: 20 } });
+      expect(points.outgoingStartBar + points.overlapBars).toBeGreaterThanOrEqual(161 - 8);
+      expect(points.overlapBars).toBeGreaterThanOrEqual(16);
+    });
+
+    it('does not mix out early to dodge a bass hole at the end', () => {
+      // The outgoing's last drop is bass-heavy and the incoming track's drop is thin: a swap at
+      // the breakdown (bar 80) would avoid the hole, at the cost of the whole second half.
+      const level = (sections: [number, number][]) => sections.flatMap(([bars, db]) => new Array<number>(bars).fill(db));
+      const outgoing = {
+        phrases: OUTGOING,
+        barCount: 176,
+        currentBar: 20,
+        lowDb: level([[16, -30], [64, -8], [16, -30], [64, -2], [16, -14]]),
+      };
+      const incoming = { phrases: INCOMING, barCount: 96, lowDb: level([[16, -28], [64, -22], [16, -26]]) };
+      const points = chooseMixPoints({ ...input, outgoing, incoming });
+      expect(points.outgoingStartBar + points.overlapBars).toBeGreaterThanOrEqual(176 - 8);
+    });
+
+    it('blends inside a long beatless outro rather than mixing out before it', () => {
+      // 40 beatless bars at the end: the track is still heard to its end, and the swap comes as
+      // early as the blend allows so the incoming beat returns soon.
+      const outgoing = phrases(['intro', 16], ['drop', 64], ['breakdown', 16], ['drop', 64], ['outro', 40, { kick: false }]);
+      const points = chooseMixPoints({ ...input, outgoing: { phrases: outgoing, barCount: 200, currentBar: 20 } });
+      expect(points.outgoingStartBar + points.overlapBars).toBeGreaterThanOrEqual(200 - 8);
+      expect(points.bassSwapBar).toBeLessThanOrEqual(8);
+    });
+
+    it('may end a phrase early for a natural exit, never more', () => {
+      // The bass leaves at bar 160 of 168: an exit the swap can land on from a start one
+      // phrase before the latest, but not from further back.
+      const outgoing = phrases(['intro', 16], ['drop', 64], ['breakdown', 16], ['drop', 64], ['outro', 8]);
+      const points = chooseMixPoints({ ...input, outgoing: { phrases: outgoing, barCount: 168, currentBar: 20 } });
+      expect(points.outgoingStartBar + points.overlapBars).toBeGreaterThanOrEqual(160);
+      expect(points.outgoingStartBar + points.overlapBars).toBeLessThanOrEqual(168);
+    });
+  });
+
   it('brings a track that starts at full energy in with an early swap, not a short blend', () => {
     const incoming = phrases(['drop', 120], ['outro', 8]);
     const points = chooseMixPoints({ ...input, incoming: { phrases: incoming, barCount: 128 } });
