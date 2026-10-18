@@ -11,7 +11,11 @@ export interface FxSettings {
   type: FxType | null;
   /** Echo: the delay in beats. Flanger / phaser: beats per sweep. Reverb: ignored. */
   beats: number;
-  /** Wet level 0–1; the echo's feedback grows with it. */
+  /**
+   * Dry/wet 0–1, equal power: 0 is the dry signal alone, 1 the effect alone (an echo-out
+   * leaves only the repeats), ½ both at −3 dB. The echo's feedback grows with it. With no
+   * effect selected the dry signal passes at unity whatever the value.
+   */
   amount: number;
 }
 
@@ -54,6 +58,8 @@ const DELAY_SMOOTHING = 0.03;
 
 export interface ChannelFx {
   ctx: BaseAudioContext;
+  /** The dry path, `source` → `output`, so the mix can take it away. */
+  dry: GainNode;
   /** Wet sum into the channel's output. */
   wet: GainNode;
   echo: { input: GainNode; delay: DelayNode; feedback: GainNode; damp: BiquadFilterNode };
@@ -74,8 +80,22 @@ export function lfoHz(beats: number, bpm: number): number {
   return bpm / 60 / Math.max(beats, 0.25);
 }
 
-/** Builds the effects for one channel: `source` (post-fader) in, `output` out. Nothing is selected. */
+/**
+ * Builds the effects for one channel: `source` (post-fader) in, `output` out. Nothing is
+ * selected. The direct `source` → `output` connection is replaced by the dry gain, so the
+ * dry/wet mix can take the dry signal away.
+ */
 export function createChannelFx(ctx: BaseAudioContext, source: AudioNode, output: AudioNode, bpm = 120): ChannelFx {
+  const dry = ctx.createGain();
+  dry.gain.value = 1;
+  try {
+    source.disconnect(output);
+  } catch {
+    // Not connected directly: nothing to replace.
+  }
+  source.connect(dry);
+  dry.connect(output);
+
   const wet = ctx.createGain();
   wet.gain.value = 0;
   wet.connect(output);
@@ -151,6 +171,7 @@ export function createChannelFx(ctx: BaseAudioContext, source: AudioNode, output
 
   const fx: ChannelFx = {
     ctx,
+    dry,
     wet,
     echo: { input: echoInput, delay: echoDelay, feedback: echoFeedback, damp: echoDamp },
     flanger: { input: flangerInput, delay: flangerDelay, lfo: flangerLfo, depth: flangerDepth, feedback: flangerFeedback },
@@ -177,7 +198,10 @@ export function setFx(fx: ChannelFx, settings: FxSettings): void {
     glide(input.gain, type === settings.type ? 1 : 0, ctx, SMOOTHING);
   }
   const amount = clamp(settings.amount, 0, 1);
-  glide(fx.wet.gain, amount, ctx, SMOOTHING);
+  // Equal-power dry/wet; with no effect the dry signal passes at unity.
+  const on = settings.type !== null;
+  glide(fx.dry.gain, on ? Math.cos((amount * Math.PI) / 2) : 1, ctx, SMOOTHING);
+  glide(fx.wet.gain, on ? Math.sin((amount * Math.PI) / 2) : 0, ctx, SMOOTHING);
   glide(fx.echo.feedback.gain, ECHO_FEEDBACK_BASE + ECHO_FEEDBACK_RANGE * amount, ctx, SMOOTHING);
   applyTempo(fx);
 }

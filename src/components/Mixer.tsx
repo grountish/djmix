@@ -202,7 +202,7 @@ export function Mixer({
         max={1}
         centre={0}
         label=""
-        title={`Effect amount ${Math.round(fx.amount * 100)}%`}
+        title={`Dry/wet ${Math.round(fx.amount * 100)}% wet (0 = dry only, 100 = effect only)`}
         color={DECK_COLOR[deck]}
         disabled={!fx.type}
         onChange={(value) => onFxChange(deck, { ...fx, amount: value })}

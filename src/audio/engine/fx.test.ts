@@ -79,6 +79,25 @@ describe('channel effects', () => {
     expect(await tail(0.3)).toBeLessThan(await tail(1));
   });
 
+  it('amount is a dry/wet mix: full wet leaves only the repeats, half wet takes both down 3 dB', async () => {
+    const echo = (amount: number) =>
+      renderImpulse((graph) => {
+        const fx = getChannelFx(graph, 'A');
+        setFxTempo(fx, 120);
+        setFx(fx, { type: 'echo', beats: 1, amount });
+      });
+    const off = await renderImpulse((graph) => getChannelFx(graph, 'A'));
+    const dryLevel = around(off, IMPULSE_AT);
+    const full = await echo(1);
+    expect(around(full, IMPULSE_AT)).toBeLessThan(SILENCE);
+    expect(around(full, IMPULSE_AT + 0.5)).toBeGreaterThan(0.001);
+    const half = await echo(0.5);
+    expect(around(half, IMPULSE_AT) / dryLevel).toBeCloseTo(Math.SQRT1_2, 1);
+    const none = await echo(0);
+    expect(around(none, IMPULSE_AT) / dryLevel).toBeCloseTo(1, 2);
+    expect(around(none, IMPULSE_AT + 0.5)).toBeLessThan(SILENCE);
+  });
+
   it('flanger, phaser and reverb each change the signal after the impulse', async () => {
     const dry = await renderImpulse((graph) => getChannelFx(graph, 'A'), 1);
     for (const type of ['flanger', 'phaser', 'reverb'] as const) {
