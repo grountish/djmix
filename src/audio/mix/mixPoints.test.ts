@@ -120,10 +120,11 @@ describe('chooseMixPoints', () => {
     expect(points.overlapBars).toBe(32);
   });
 
-  it('enters at a later drop when the first kick section is too short to blend over', () => {
+  it('never cues past a quarter of the incoming track, even when a later drop would blend better', () => {
     // A 7-bar kick intro (phrase lines from bar 7), an 8-bar drop, a 48-bar kickless breakdown,
-    // then a long drop: a blend over the breakdown would lose the beat and an 8-bar blend is
-    // too short, so cue a phrase before the later drop.
+    // then a long drop at bar 63. A blend into that drop would be the smoothest, but it would
+    // skip almost half the track: the cue stays within the first quarter (36 of 144 bars) and
+    // the blend is made shorter instead.
     const incoming = phrases(
       ['intro', 7, { kick: true }],
       ['drop', 8],
@@ -132,9 +133,16 @@ describe('chooseMixPoints', () => {
       ['outro', 17],
     );
     const points = chooseMixPoints({ ...input, incoming: { phrases: incoming, barCount: 144 } });
-    expect(points.overlapBars).toBe(32);
-    expect(points.incomingStartBar).toBe(55);
-    expect(points.bassSwapBar).toBe(8);
+    expect(points.incomingStartBar).toBeLessThanOrEqual(36);
+    expect(points.overlapBars).toBeGreaterThanOrEqual(8);
+  });
+
+  it('caps the cue at a quarter for a cut too', () => {
+    // No blend possible (max overlap 0); the only drop is at bar 60 of 100.
+    const incoming = phrases(['intro', 60, { kick: false, bass: false }], ['drop', 32], ['outro', 8]);
+    const points = chooseMixPoints({ ...input, incoming: { phrases: incoming, barCount: 100 }, maxOverlapBars: 0 });
+    expect(points.overlapBars).toBe(0);
+    expect(points.incomingStartBar).toBeLessThanOrEqual(25);
   });
 
   it('brings a track that starts at full energy in with an early swap, not a short blend', () => {

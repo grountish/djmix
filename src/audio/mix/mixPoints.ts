@@ -122,6 +122,12 @@ const DROP_DELAY_WEIGHT = 0.05;
 const MAX_PICKUP_BARS = 2;
 /** Per bar of the incoming track skipped past its first drop. */
 const SKIP_WEIGHT = 0.05;
+/**
+ * The incoming track is never cued later than this share of its length. Skipping a beatless
+ * intro is fine; entering at a later drop is not — a track is a few minutes long and is meant
+ * to be heard (the user's rule: at most a quarter skipped).
+ */
+const MAX_CUE_FRACTION = 0.25;
 /** A blend shorter than this is worth looping the outgoing track for. */
 const LOOP_BELOW_BARS = 16;
 /** Each repeat of the loop is heard as one; a couple pass as an extended outro, more don't. */
@@ -165,7 +171,8 @@ export function chooseMixPoints(input: MixPointInput): MixPoints {
   // Cues sit on the incoming phrase grid, so its phrases land on the outgoing ones. They reach
   // as far as its last drop: a track whose first kick section is short may be better entered
   // later, at the cost of the music skipped.
-  const lastEntry = entries.length ? entries[entries.length - 1] : drop;
+  const latestCue = Math.floor(incoming.barCount * MAX_CUE_FRACTION);
+  const lastEntry = Math.min(latestCue, entries.length ? entries[entries.length - 1] : drop);
   const cues: number[] = [];
   for (let bar = 0; bar <= lastEntry; bar++) if (onGrid(bar, originIn)) cues.push(bar);
   if (cues.length === 0) cues.push(0);
@@ -265,7 +272,7 @@ export function chooseMixPoints(input: MixPointInput): MixPoints {
   // at the next entry for 'now', else on the last phrase line before the final phrase.
   if (input.timing === 'now') {
     const entry = nowEntries.find((bar) => bar >= earliest && bar < outgoing.barCount);
-    if (entry !== undefined) return { overlapBars: 0, outgoingStartBar: entry, incomingStartBar: drop, bassSwapBar: 0 };
+    if (entry !== undefined) return { overlapBars: 0, outgoingStartBar: entry, incomingStartBar: Math.min(drop, latestCue), bassSwapBar: 0 };
   }
   let cut = outgoing.barCount - PHRASE_BARS;
   while (cut >= earliest && !onGrid(cut, originOut)) cut--;
@@ -274,7 +281,7 @@ export function chooseMixPoints(input: MixPointInput): MixPoints {
     while (cut < outgoing.barCount && !onGrid(cut, originOut)) cut++;
     if (cut >= outgoing.barCount) cut = Math.min(Math.max(earliest, 0), Math.max(0, outgoing.barCount - 1));
   }
-  return { overlapBars: 0, outgoingStartBar: cut, incomingStartBar: drop, bassSwapBar: 0 };
+  return { overlapBars: 0, outgoingStartBar: cut, incomingStartBar: Math.min(drop, latestCue), bassSwapBar: 0 };
 }
 
 /** Phrases of the outgoing track that can be looped, latest first. None without kick information. */
