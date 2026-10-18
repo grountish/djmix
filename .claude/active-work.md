@@ -10,6 +10,12 @@ https://miltonmannarino.github.io/djmix-features/ — what changed, how to test,
 Shared dev server: Vite on :5173 (+ Electron). The live tests (`npm run test:live`) start their
 own Vite on :5174 with HMR off, so edits don't reload the page under a running test.
 
+## Session 91b26f74 — deck loading indicator — DONE `2a65f6e` (2026-10-19)
+
+`DeckState.loading` (the track on its way), `SET_DECK_LOADING` around `loadToDeck` (a later
+load on the same deck supersedes an earlier one, which then neither lands nor clears the
+indicator), spinner + "Loading <title>" on the deck, `EmptyWaveform({ hint })`. Every file is free.
+
 ## Session a131b68b — layout: decks a bit smaller — DONE `63467a9` + `efce872` (2026-10-18)
 
 Stacked mixer kept; knobs shown at 34 px, faders 96 px, tighter gaps; `.wave-main` has a pixel
