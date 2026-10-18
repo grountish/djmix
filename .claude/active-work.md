@@ -10,11 +10,10 @@ https://miltonmannarino.github.io/djmix-features/ — what changed, how to test,
 Shared dev server: Vite on :5173 (+ Electron). The live tests (`npm run test:live`) start their
 own Vite on :5174 with HMR off, so edits don't reload the page under a running test.
 
-## Session a131b68b — layout: smaller decks/mixer, more room for the playlist — DONE `63467a9` (2026-10-18)
+## Session a131b68b — layout: decks a bit smaller — DONE `63467a9` + `efce872` (2026-10-18)
 
-Two-column mixer (knobs | FX, faders, crossfader, Auto, master), faders 88 px, mixer column
-340 px; `.wave-main` has a pixel flex basis (its aspect ratio used to hold the row). Decks row
-≈335 px at any window size. `src/styles/index.css` is free.
+Stacked mixer kept; knobs shown at 34 px, faders 96 px, tighter gaps; `.wave-main` has a pixel
+flex basis (its aspect ratio used to hold the row). Decks row ≈530 px (was 614). `index.css` is free.
 
 ## Session a131b68b — "10 improvements" batch — FINISHED 2026-10-18
 
