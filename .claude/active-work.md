@@ -10,6 +10,15 @@ https://miltonmannarino.github.io/djmix-features/ — what changed, how to test,
 Shared dev server: Vite on :5173 (+ Electron). The live tests (`npm run test:live`) start their
 own Vite on :5174 with HMR off, so edits don't reload the page under a running test.
 
+## Session 6e8d1284 — "Loop" mix style: incoming intro looped while it fades in — IN PROGRESS (2026-10-19)
+
+A second mix style next to the blend: the incoming track loops a sparse phrase (kick, no bass)
+of its intro while its fader rises, then plays on into its drop on the bass swap; the outgoing
+loops its last kick phrase when it runs out of bars. Files: `src/audio/mix/mixPoints.ts` (+test),
+`planner.ts`, `runner.ts` (+test), `balance.ts`, `src/audio/automixController.ts`,
+`src/store/useAutoDj.ts`, `AppContext.tsx`, `mixerPrefs.ts`, `src/App.tsx`, `Mixer.tsx`,
+`Waveform.tsx`, `index.css`, `scripts/mixlab*.ts`, `scripts/mixset.ts`.
+
 ## Session 91b26f74 — Auto mixes out at the end of the track — DONE `e49d972` (2026-10-19)
 
 `chooseMixPoints` ('end'): the overlap ends within a phrase of the outgoing track's end
