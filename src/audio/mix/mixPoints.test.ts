@@ -264,5 +264,63 @@ describe('chooseMixPoints', () => {
       expect(loopedTrackBar(undefined, 99)).toBe(99);
       expect(loopWrapsBy(undefined, 99)).toBe(0);
     });
+
+    it('plays on past a loop with a number of repeats', () => {
+      const loop = { startBar: 0, bars: 8, repeats: 2 };
+      expect([0, 7, 8, 15, 16, 23, 24, 30, 31.5].map((bar) => loopedTrackBar(loop, bar))).toEqual([0, 7, 0, 7, 0, 7, 8, 14, 15.5]);
+      expect([7, 8, 16, 24, 40].map((bar) => loopWrapsBy(loop, bar))).toEqual([0, 1, 2, 2, 2]);
+    });
+  });
+
+  describe('the loop style', () => {
+    const SHORT_INTRO = phrases(['intro', 8], ['drop', 64], ['outro', 16]);
+    const loopInput = { ...input, style: 'loop' as const, incoming: { phrases: SHORT_INTRO, barCount: 88 } };
+
+    it('holds a short intro on a loop so its drop lands on the swap of a long blend', () => {
+      // A blend brings an 8-bar intro's drop in after a quarter of the overlap.
+      expect(chooseMixPoints({ ...loopInput, style: 'blend' })).toEqual({
+        overlapBars: 32,
+        outgoingStartBar: 144,
+        incomingStartBar: 0,
+        bassSwapBar: 8,
+      });
+      // The loop plays the intro twice: the drop lands mid-blend, where the outgoing bass leaves.
+      expect(chooseMixPoints(loopInput)).toEqual({
+        overlapBars: 32,
+        outgoingStartBar: 144,
+        incomingStartBar: 0,
+        bassSwapBar: 16,
+        incomingLoop: { startBar: 0, bars: 8, repeats: 1 },
+      });
+    });
+
+    it('loops a phrase with a kick and no bassline, over by the swap', () => {
+      const incoming = phrases(['intro', 8, { kick: false }], ['intro', 8], ['build', 8], ['drop', 64], ['outro', 16]);
+      for (const timing of ['end', 'now'] as const) {
+        const points = chooseMixPoints({ ...loopInput, timing, incoming: { phrases: incoming, barCount: 104 } });
+        const loop = points.incomingLoop!;
+        expect(loop.startBar).toBeGreaterThanOrEqual(8);
+        expect(loop.startBar + loop.bars).toBeLessThanOrEqual(24);
+        expect(points.incomingStartBar).toBeLessThanOrEqual(loop.startBar);
+        expect(loop.startBar + loop.bars * (loop.repeats + 1)).toBeLessThanOrEqual(points.incomingStartBar + points.bassSwapBar);
+      }
+    });
+
+    it('never loops the incoming track for a blend, nor one without a sparse intro', () => {
+      expect(chooseMixPoints(input).incomingLoop).toBeUndefined();
+      const startsOnDrop = phrases(['drop', 120], ['outro', 8]);
+      expect(chooseMixPoints({ ...loopInput, incoming: { phrases: startsOnDrop, barCount: 128 } }).incomingLoop).toBeUndefined();
+    });
+
+    it('loops the outgoing track when that makes the blend better, not only when it is short', () => {
+      // A track that starts on its drop: the outgoing outro is looped once to reach its natural
+      // swap (where its bass leaves) with a 32-bar blend.
+      const startsOnDrop = { phrases: phrases(['drop', 120], ['outro', 8]), barCount: 128 };
+      expect(chooseMixPoints({ ...input, incoming: startsOnDrop }).outgoingLoop).toBeUndefined();
+      const points = chooseMixPoints({ ...loopInput, incoming: startsOnDrop });
+      expect(points.outgoingLoop).toEqual({ startBar: 168, bars: 8 });
+      expect(points.overlapBars).toBe(32);
+      expect(points.outgoingStartBar + points.bassSwapBar).toBe(160);
+    });
   });
 });

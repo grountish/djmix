@@ -256,6 +256,89 @@ describe('transition runner', () => {
     expect(Math.abs(phase(inc.firstBeatTime, outg.firstBeatTime, 60 / plan.tempo.meetBpm))).toBeLessThan(0.002);
   }, 180000);
 
+  it('holds the incoming intro on a loop while it fades in (loop style), then plays on into its drop', async () => {
+    const outgoing = track(124, [
+      { bars: 8, kick: true, hats: true },
+      { bars: 24, ...FULL },
+      { bars: 16, kick: true, hats: true, bass: true, chords: true },
+    ]);
+    // An 8-bar intro: a blend would bring the drop in a quarter of the way into the overlap.
+    const incoming = track(126, [
+      { bars: 8, kick: true, hats: true },
+      { bars: 16, ...FULL },
+      { bars: 8, kick: true, hats: true },
+    ]);
+
+    const seconds = 95;
+    const ctx = new webAudio.OfflineAudioContext({ numberOfChannels: 2, length: seconds * SAMPLE_RATE, sampleRate: SAMPLE_RATE });
+    const mix = createOfflineMix(ctx, ctx.createGain(), createStretchNode);
+    // Channels: 0 = incoming, 1 = outgoing, both before the EQ.
+    const taps = ctx.createChannelMerger(2);
+    mix.graph.decks.B.input.connect(taps, 0, 0);
+    mix.graph.decks.A.input.connect(taps, 0, 1);
+    taps.connect(ctx.destination);
+    const toBuffer = (channels: Float32Array[]) => {
+      const buffer = ctx.createBuffer(2, channels[0].length, SAMPLE_RATE);
+      channels.forEach((c, i) => buffer.getChannelData(i).set(c));
+      return buffer;
+    };
+    await mix.decks.A.load(toBuffer(outgoing.channels));
+    await mix.decks.B.load(toBuffer(incoming.channels));
+    mix.decks.A.setKeyLock(true);
+    mix.decks.A.seek(12);
+    mix.decks.A.play(0);
+
+    const plan = planTransition({
+      outgoing: { analysis: outgoing.analysis, trackTime: 12, rate: 1, semitones: 0 },
+      incoming: { analysis: incoming.analysis },
+      style: 'loop',
+    });
+    expect(plan.kind).toBe('blend');
+    expect(plan.overlapBars).toBe(32);
+    expect(plan.incomingStartBar).toBe(0);
+    expect(plan.incomingLoop).toEqual({ startBar: 0, bars: 8, repeats: 1 });
+    // The intro plays twice, so the drop (track bar 8) lands on the swap at overlap bar 16.
+    expect(plan.bassSwapBar).toBe(16);
+    expect(plan.warnings).toEqual([]);
+
+    const runner = new TransitionRunner(
+      ctx,
+      mix.graph,
+      { id: 'A', player: mix.decks.A, clock: trackClock(outgoing.analysis) },
+      { id: 'B', player: mix.decks.B, clock: trackClock(incoming.analysis) },
+      plan,
+    );
+    runner.start();
+    expect(runner.lockAbandoned).toBe(false);
+    const out = await renderWithRunner(ctx, runner, [mix.decks.A, mix.decks.B]);
+    expect(runner.finished).toBe(true);
+    expect(runner.finishTime).toBeLessThan(seconds - 1);
+
+    const start = plan.outgoingStartBar;
+    const bar = (n: number) => runner.outgoingBeatTime((start + n) * 4)!;
+    const slice = (channel: number, from: number, to: number) =>
+      out.getChannelData(channel).slice(Math.round(from * SAMPLE_RATE), Math.round(to * SAMPLE_RATE));
+    const db = (samples: Float32Array) => 10 * Math.log10(samples.reduce((s, v) => s + v * v, 0) / samples.length + 1e-12);
+
+    // Overlap bars 0–8 and 8–16 are the intro twice; the drop (bass, clap, chords) comes after.
+    const firstPass = slice(0, bar(0) + 0.1, bar(8) - 0.1);
+    const secondPass = slice(0, bar(8) + 0.1, bar(16) - 0.1);
+    const drop = slice(0, bar(16) + 0.1, bar(24) - 0.1);
+    expect(Math.abs(db(secondPass) - db(firstPass))).toBeLessThan(1.5);
+    expect(db(drop)).toBeGreaterThan(db(firstPass) + 3);
+
+    // Through the jump back the incoming kicks stay on the outgoing ones.
+    for (const [from, to] of [
+      [bar(8) + 0.5, bar(16) - 0.5],
+      [bar(16) + 0.5, bar(24) - 0.5],
+    ]) {
+      const inc = analyzeAudio([slice(0, from, to)], SAMPLE_RATE);
+      const outg = analyzeAudio([slice(1, from, to)], SAMPLE_RATE);
+      expect(inc.bpm).toBeCloseTo(plan.tempo.meetBpm, 1);
+      expect(Math.abs(phase(inc.firstBeatTime, outg.firstBeatTime, 60 / plan.tempo.meetBpm))).toBeLessThan(0.002);
+    }
+  }, 180000);
+
   it("doesn't chase beat-lock rates when the two beat clocks disagree", async () => {
     // 120 → 123 BPM meeting at 121.5; the incoming clock is either right or miscounts beats
     // as 8/7 of its tempo (the drift tracker's old off-beat slip).

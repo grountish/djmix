@@ -3,7 +3,7 @@
  * analyser or the planner can be judged on the whole library rather than on one pair.
  *
  *   npm run mixset -- <folder|file...> [--order folder|smart] [--out mixset-out] [--limit N]
- *                     [--no-balance] [--wav] [--pairs "a>b;c>d"]
+ *                     [--no-balance] [--wav] [--pairs "a>b;c>d"] [--style blend|loop]
  *
  * Analyses are cached in <out>/analysis-cache.json keyed by file, size and analyser version.
  * Writes <out>/report.json and <out>/report.md and prints the table. A row is flagged when
@@ -115,13 +115,14 @@ export function markdownTable(rows: SetRow[]): string {
 async function main(): Promise<void> {
   const { files: inputs, options } = parseArgs(
     process.argv.slice(2),
-    ['--order', '--out', '--limit', '--pairs'],
+    ['--order', '--out', '--limit', '--pairs', '--style'],
     ['--no-balance', '--wav'],
   );
   const outDir = (options.get('--out') as string | undefined) ?? 'mixset-out';
   const order = (options.get('--order') as string | undefined) ?? 'folder';
   const limit = options.has('--limit') ? Number(options.get('--limit')) : Infinity;
   const policy = { balance: !options.has('--no-balance') };
+  const style = options.get('--style') === 'loop' ? 'loop' : 'blend';
   const files = collectFiles(inputs);
   if (files.length < 2) throw new Error('mixset needs at least two audio files');
   mkdirSync(outDir, { recursive: true });
@@ -172,7 +173,7 @@ async function main(): Promise<void> {
       const outgoing = await load(fileA);
       const incoming = await load(fileB);
       const wavPath = options.has('--wav') ? join(outDir, `${String(index + 1).padStart(2, '0')} ${basename(fileA, extname(fileA))} to ${basename(fileB, extname(fileB))}.wav`) : undefined;
-      const { report } = await renderTransition(outgoing, incoming, { policy, wavPath });
+      const { report } = await renderTransition(outgoing, incoming, { policy, style, wavPath });
       rows.push({ ...report, index: index + 1, flags: flagsFor(report) });
     } catch (error) {
       rows.push({

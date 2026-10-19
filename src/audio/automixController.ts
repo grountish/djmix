@@ -1,7 +1,7 @@
 import type { AudioAnalysis } from './analysis/types';
 import { getMixGraph } from './engine/liveGraph';
 import type { DeckId } from './engine/mixGraph';
-import type { MixTiming } from './mix/mixPoints';
+import type { MixStyle, MixTiming } from './mix/mixPoints';
 import { planTransition, type PlanPolicy, type TransitionPlan } from './mix/planner';
 import { type LaneValues, TransitionRunner } from './mix/runner';
 import { trackClock } from './mix/trackClock';
@@ -76,6 +76,7 @@ export function previewTransition(
   incoming: AudioAnalysis,
   timing: MixTiming = 'end',
   startBar?: number,
+  style?: MixStyle,
 ): TransitionPlan | null {
   const player = getDeckPlayer(outgoingId);
   if (!player.isPlaying) return null;
@@ -91,6 +92,7 @@ export function previewTransition(
     incoming: { analysis: incoming, trimDb: deckTrimDb(incomingId) },
     timing,
     startBar,
+    style,
     policy: planPolicy,
   });
 }
@@ -133,13 +135,14 @@ export function startAutomixTransition(
   timing: MixTiming,
   callbacks: AutomixCallbacks,
   startBar?: number,
+  style?: MixStyle,
 ): TransitionPlan | null {
   cancelTransition();
   const incomingId: DeckId = outgoingId === 'A' ? 'B' : 'A';
   const outgoingPlayer = getDeckPlayer(outgoingId);
   const incomingPlayer = getDeckPlayer(incomingId);
   if (!incomingPlayer.audioBuffer) return null;
-  const plan = previewTransition(outgoingId, outgoing, incoming, timing, startBar);
+  const plan = previewTransition(outgoingId, outgoing, incoming, timing, startBar, style);
   if (!plan) return null;
 
   const graph = getMixGraph();
@@ -223,9 +226,11 @@ export function describePlan(plan: TransitionPlan): string {
   const keys = `${plan.harmonic.outgoingKey}→${plan.harmonic.incomingKey}`;
   const shift = plan.incomingSemitones ? ` (${plan.incomingSemitones > 0 ? '+' : ''}${plan.incomingSemitones} st)` : '';
   const loop = plan.outgoingLoop ? `, looping bars ${plan.outgoingLoop.startBar + 1}–${plan.outgoingLoop.startBar + plan.outgoingLoop.bars}` : '';
+  const intro = plan.incomingLoop;
+  const held = intro ? ` (its bars ${intro.startBar + 1}–${intro.startBar + intro.bars} played ${intro.repeats + 1}×)` : '';
   const what =
     plan.kind === 'blend'
-      ? `${plan.overlapBars}-bar blend at bar ${plan.outgoingStartBar + 1}, next track in from its bar ${plan.incomingStartBar + 1}, bass swap at bar ${plan.outgoingStartBar + plan.bassSwapBar + 1}${loop}`
+      ? `${plan.overlapBars}-bar ${intro ? 'loop mix' : 'blend'} at bar ${plan.outgoingStartBar + 1}, next track in from its bar ${plan.incomingStartBar + 1}${held}, bass swap at bar ${plan.outgoingStartBar + plan.bassSwapBar + 1}${loop}`
       : `cut at bar ${plan.outgoingStartBar + 1} into bar ${plan.incomingStartBar + 1}`;
   const warnings = plan.warnings.length ? ` · ⚠ ${plan.warnings.join('; ')}` : '';
   return `${what} · ${tempo} · ${keys}${shift}${warnings}`;

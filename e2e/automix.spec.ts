@@ -3,11 +3,13 @@ import { expect, test, type Page } from '@playwright/test';
 /**
  * Auto DJ, live: synthetic tracks, Auto on, two transitions played in real time through the
  * real audio graph while a 50 ms sampler reads the channel faders and the post-fader meters.
- * The first transition is Auto's own (at the end of the first track). The third track is only
- * added afterwards, so Auto can't run ahead; the second transition is then a Mix now capped to
- * 16 bars in the middle of the second track, so the outgoing deck is stopped with audio left to
- * play. Offline renders miss timing bugs between the scheduler and the stretcher (a stopped deck
- * that sounds on for 100 ms, a fade that jumps back up); this catches them.
+ * The first transition is Auto's own (at the end of the first track), in the loop style: the
+ * second track's kick-only intro is held on a loop, so its deck jumps back once while it fades
+ * in. The third track is only added afterwards, so Auto can't run ahead; the second transition
+ * is then a plain Mix now blend capped to 16 bars in the middle of the second track, so the
+ * outgoing deck is stopped with audio left to play. Offline renders miss timing bugs between the
+ * scheduler and the stretcher (a stopped deck that sounds on for 100 ms, a fade that jumps back
+ * up, a loop that doesn't jump); this catches them.
  */
 
 interface DeckSample {
@@ -15,6 +17,8 @@ interface DeckSample {
   fader: number;
   level: number;
   track: string | null;
+  /** Track seconds the deck is at. */
+  time: number;
 }
 
 interface Sample {
@@ -50,10 +54,10 @@ test('two automix transitions: fades fall, stopped decks go silent, no gaps', as
   await page.waitForFunction(() => !!window.__djmix);
 
   // Intro without a kick, a body, a kick-only outro. The second track is longer, so there is
-  // time between the transitions.
+  // time between the transitions, and its intro has a kick, for the loop style to hold.
   const setup = await addTracks(page, [
     { id: TRACK_IDS[0], bodyBars: 24 },
-    { id: TRACK_IDS[1], bodyBars: 64 },
+    { id: TRACK_IDS[1], bodyBars: 64, kickIntro: true },
   ]);
   expect(setup.contextState).toBe('running');
   test.info().annotations.push({ type: 'setup', description: JSON.stringify(setup) });
@@ -68,11 +72,13 @@ test('two automix transitions: fades fall, stopped decks go silent, no gaps', as
       setMasterVolume: (v: number) => void;
       setAutomixDirection: (d: 'up' | 'down' | 'any') => void;
       setAutomixEnabled: (on: boolean) => void;
+      setMixStyle: (style: 'blend' | 'loop') => void;
     };
     const track = bridge.getState().tracks.find((t) => t.id === first)!;
     await actions.loadToDeck('A', track);
     actions.setMasterVolume(0.5);
     actions.setAutomixDirection('any');
+    actions.setMixStyle('loop');
     actions.setAutomixEnabled(true);
   }, TRACK_IDS[0]);
 
@@ -95,6 +101,7 @@ test('two automix transitions: fades fall, stopped decks go silent, no gaps', as
       { timeout: 60_000, intervals: [500] },
     )
     .toBe(true);
+  await page.evaluate(() => (window.__djmix!.actions as { setMixStyle: (style: 'blend' | 'loop') => void }).setMixStyle('blend'));
   await page.waitForTimeout(2000);
   await page.evaluate(() => {
     window.__djmix!.setPlanPolicy({ maxOverlapBars: 16 });
@@ -127,6 +134,24 @@ test('two automix transitions: fades fall, stopped decks go silent, no gaps', as
     const statuses = probe.slice(start, end).map((s) => s.status ?? '');
     const plan = statuses.find((status) => status.startsWith('Mixing soon')) ?? statuses.find((status) => status.startsWith('Mixing'));
     if (plan) line.push(plan);
+
+    // 0. The loop mix: the incoming deck jumps back by its looped intro (8 bars) once per repeat
+    // ("its bars 1–8 played 3×": twice).
+    const jumps: number[] = [];
+    for (let i = start + 1; i <= end; i++) {
+      const back = probe[i - 1][incoming].time - probe[i][incoming].time;
+      if (probe[i - 1][incoming].playing && back > 1) jumps.push(back);
+    }
+    line.push(`incoming jumps back ${jumps.map((s) => `${s.toFixed(1)} s`).join(', ') || 'never'}`);
+    if (n === 0) {
+      const plays = Number(/played (\d)×/.exec(plan ?? '')?.[1] ?? 0);
+      expect.soft(plays, 'transition 1 is a loop mix').toBeGreaterThan(1);
+      expect.soft(jumps, 'the incoming deck jumps back once per repeat').toHaveLength(plays - 1);
+      // 8 bars at 128 BPM, less the 50 ms the deck moved on between two samples.
+      for (const back of jumps) expect.soft(back, 'by its looped intro').toBeCloseTo((8 * 4 * 60) / 128, 0);
+    } else {
+      expect.soft(jumps, `no jump in transition ${n + 1}`).toEqual([]);
+    }
 
     // 1. The stopped deck is silent at once and stays silent.
     const after = probe.filter((s) => s.t >= stopTime + 0.06 && s.t <= stopTime + 2);
@@ -185,9 +210,11 @@ function transitionsDone(page: Page): Promise<{ done: number; settled: boolean }
 interface TrackSpec {
   id: string;
   bodyBars: number;
+  /** A kick (no bassline) in the intro: the loop style holds it on a loop. */
+  kickIntro?: boolean;
 }
 
-/** Synthesises the tracks in the page (8-bar kickless intro, body, 8-bar kick-only outro) and adds them. */
+/** Synthesises the tracks in the page (8-bar intro, body, 8-bar kick-only outro) and adds them. */
 function addTracks(page: Page, specs: TrackSpec[]): Promise<{ contextState: string; sampleRate: number; durations: number[] }> {
   return page.evaluate(async (specs: TrackSpec[]) => {
     const bridge = window.__djmix!;
@@ -197,12 +224,12 @@ function addTracks(page: Page, specs: TrackSpec[]): Promise<{ contextState: stri
     const { synthesizeTrack } = (await import(synthUrl)) as typeof import('../src/audio/analysis/syntheticTrack');
     const ctx = bridge.getAudioContext();
     await ctx.resume();
-    const make = ({ id, bodyBars }: TrackSpec) => {
+    const make = ({ id, bodyBars, kickIntro }: TrackSpec) => {
       const synth = synthesizeTrack({
         bpm: 128,
         firstDownbeat: 0.25,
         sections: [
-          { bars: 8, hats: true, chords: true },
+          kickIntro ? { bars: 8, kick: true, hats: true, chords: true } : { bars: 8, hats: true, chords: true },
           { bars: bodyBars, kick: true, bass: true, hats: true, clap: true },
           { bars: 8, kick: true, hats: true },
         ],
@@ -260,7 +287,13 @@ async function installSampler(page: Page): Promise<void> {
       const state = bridge.getState();
       const deck = (id: DeckId): DeckSample => {
         const d = id === 'A' ? state.deckA : state.deckB;
-        return { playing: d.playback.isPlaying, fader: graph.decks[id].fader.gain.value, level: level(meters[id]), track: d.track?.id ?? null };
+        return {
+          playing: d.playback.isPlaying,
+          fader: graph.decks[id].fader.gain.value,
+          level: level(meters[id]),
+          track: d.track?.id ?? null,
+          time: d.playback.currentTime,
+        };
       };
       probe.push({
         t: graph.ctx.currentTime,

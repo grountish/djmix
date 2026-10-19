@@ -1,6 +1,6 @@
 import type { AudioAnalysis, BarEnergies } from '../analysis/types';
 import { loudnessTrimDb } from '../engine/curves';
-import { loopedTrackBar, type OutgoingLoop } from './mixPoints';
+import { type IncomingLoop, loopedTrackBar, type OutgoingLoop } from './mixPoints';
 import type { TransitionPlan } from './planner';
 import { type Lane, type LaneControl, type LaneTarget, laneValueAt } from './templates';
 
@@ -18,11 +18,11 @@ export const BANDS: readonly Band[] = ['low', 'mid', 'high'];
 
 export interface BalanceDeck {
   bars: BarEnergies;
-  /** Track bar playing when the overlap starts (outgoing bars count along the loop). */
+  /** Track bar playing when the overlap starts (later bars count along the loop). */
   startBar: number;
   /** Loudness trim the deck plays with, dB. */
   trimDb: number;
-  loop?: OutgoingLoop;
+  loop?: OutgoingLoop | IncomingLoop;
 }
 
 export interface BalanceInput {
@@ -102,6 +102,7 @@ export function balancePlan(
       bars: incoming.bars,
       startBar: plan.incomingStartBar,
       trimDb: trims.incoming ?? loudnessTrimDb(incoming.loudness.integratedLufs),
+      loop: plan.incomingLoop,
     },
   });
   return { ...plan, lanes, balance: report };
@@ -221,21 +222,21 @@ function deckSeries(deck: BalanceDeck, target: LaneTarget, n: number): DeckSerie
   const reference = {} as Record<Band, number>;
   for (const band of BANDS) {
     const raw: number[] = [];
-    for (let b = 0; b <= n; b++) raw.push(contentDb(deck, target, band, b));
+    for (let b = 0; b <= n; b++) raw.push(contentDb(deck, band, b));
     level[band] = smooth(raw);
     const window =
       target === 'outgoing'
         ? { from: -REFERENCE_BARS, to: 0, fallbackFrom: 0, fallbackTo: Math.min(REFERENCE_BARS, n) }
         : { from: n, to: n + REFERENCE_BARS, fallbackFrom: Math.max(0, n - REFERENCE_BARS), fallbackTo: n };
-    reference[band] = referenceDb(deck, target, band, window);
+    reference[band] = referenceDb(deck, band, window);
   }
   return { level, reference };
 }
 
 /** The deck's band level (dB, with its trim) at an overlap bar; silence past either end of the track. */
-function contentDb(deck: BalanceDeck, target: LaneTarget, band: Band, bar: number): number {
+function contentDb(deck: BalanceDeck, band: Band, bar: number): number {
   const own = deck.startBar + bar;
-  const trackBar = target === 'outgoing' ? loopedTrackBar(deck.loop, own) : own;
+  const trackBar = loopedTrackBar(deck.loop, own);
   const values = deck.bars[`${band}Db`];
   if (trackBar < 0 || trackBar >= values.length) return SILENCE_DB;
   return values[trackBar] + deck.trimDb;
@@ -244,14 +245,13 @@ function contentDb(deck: BalanceDeck, target: LaneTarget, band: Band, bar: numbe
 /** Power mean of the deck's level over a window of overlap bars (a fallback window when it is empty). */
 function referenceDb(
   deck: BalanceDeck,
-  target: LaneTarget,
   band: Band,
   window: { from: number; to: number; fallbackFrom: number; fallbackTo: number },
 ): number {
   const levels = (from: number, to: number) => {
     const out: number[] = [];
     for (let bar = from; bar < to; bar++) {
-      const db = contentDb(deck, target, band, bar);
+      const db = contentDb(deck, band, bar);
       if (db > SILENCE_DB) out.push(db);
     }
     return out;

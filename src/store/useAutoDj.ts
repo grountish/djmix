@@ -110,7 +110,7 @@ export function useAutoDj(): void {
       const timing = automix.enabled ? 'end' : 'now';
       const chosen = automix.startBar;
       const startBar = chosen && chosen.trackId === decks.current.track.id ? chosen.bar : undefined;
-      const plan = previewTransition(decks.current.id, outgoing, incoming, timing, startBar);
+      const plan = previewTransition(decks.current.id, outgoing, incoming, timing, startBar, automix.style);
       if (!plan) return clearNext();
 
       const next: NextMix = {
@@ -159,6 +159,7 @@ function samePlan(a: NextMix | null, b: NextMix): boolean {
       n.plan.bassSwapBar,
       n.plan.outgoingLoop?.startBar ?? -1,
       n.plan.outgoingLoop?.bars ?? 0,
+      n.plan.incomingLoop ? `${n.plan.incomingLoop.startBar}/${n.plan.incomingLoop.bars}/${n.plan.incomingLoop.repeats}` : '-',
       n.plan.warnings.join('|'),
     ].join(',');
   return key(a) === key(b);

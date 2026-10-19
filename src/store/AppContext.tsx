@@ -14,7 +14,7 @@ import type {
 } from '@/types';
 import { effectiveAnalysis } from '@/audio/analysis/overrides';
 import { mergeTracks } from './library';
-import { loadMixerPrefs, saveMixerPrefs } from './mixerPrefs';
+import { loadMixerPrefs, type MixerPrefs, saveMixerPrefs } from './mixerPrefs';
 import {
   getDeckLoop,
   loadAudioBufferToDeck,
@@ -46,7 +46,7 @@ import {
 } from '@/audio/mixingEngine';
 import { cancelTransition, describePlan, formatCountdown, startAutomixTransition } from '@/audio/automixController';
 import { orderSet, sequencerTrackFromAnalysis, type TempoDirection } from '@/audio/mix/sequencer';
-import type { MixTiming } from '@/audio/mix/mixPoints';
+import type { MixStyle, MixTiming } from '@/audio/mix/mixPoints';
 import type { TransitionPlan } from '@/audio/mix/planner';
 import { eqDbToGain } from '@/audio/mix/templates';
 import { eqGainToKnob } from '@/audio/engine/curves';
@@ -97,6 +97,8 @@ export interface AppState {
     status: string | null;
     /** Which way the set's tempo travels when automix orders or picks tracks. */
     direction: TempoDirection;
+    /** How automix and Mix now mix: a blend, or with the incoming intro held on a loop. */
+    style: MixStyle;
     /** The mix coming up (Auto's, or what Mix now would do), or the one running. */
     next: NextMix | null;
     startBar: MixStartBar | null;
@@ -135,6 +137,7 @@ type Action =
   | { type: 'SET_AUTOMIX_ACTIVE_DECK'; deck: 'A' | 'B' | null }
   | { type: 'SET_AUTOMIX_STATUS'; status: string | null }
   | { type: 'SET_AUTOMIX_DIRECTION'; direction: TempoDirection }
+  | { type: 'SET_MIX_STYLE'; style: MixStyle }
   | { type: 'SET_QUEUE'; queue: string[] }
   | { type: 'MARK_PLAYED'; trackId: string }
   | { type: 'SET_AUTOMIX_NEXT'; next: NextMix | null }
@@ -181,6 +184,7 @@ const initialState: AppState = {
     activeDeck: null,
     status: null,
     direction: 'up',
+    style: mixerPrefs.mixStyle,
     next: null,
     startBar: null,
   },
@@ -410,6 +414,9 @@ function reducer(state: AppState, action: Action): AppState {
     case 'SET_AUTOMIX_DIRECTION':
       return { ...state, automix: { ...state.automix, direction: action.direction } };
 
+    case 'SET_MIX_STYLE':
+      return { ...state, automix: { ...state.automix, style: action.style } };
+
     case 'SET_AUTOMIX_NEXT':
       return { ...state, automix: { ...state.automix, next: action.next } };
 
@@ -489,6 +496,7 @@ interface AppContextValue {
     /** Orders the queue for the set's direction, continuing from the playing track. */
     smartOrderQueue: () => void;
     setAutomixDirection: (direction: TempoDirection) => void;
+  setMixStyle: (style: MixStyle) => void;
     markPlayed: (trackId: string) => void;
     /** The upcoming transition, as the Auto DJ hook previews it. */
     setAutomixNext: (next: NextMix | null) => void;
@@ -513,6 +521,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   /** Per deck, the number of the latest `loadToDeck` call; older calls stand down. */
   const loadCounter = useRef<Record<'A' | 'B', number>>({ A: 0, B: 0 });
   stateRef.current = state;
+
+  /** Saves the mixer preferences with `patch` applied to the ones in the store. */
+  const savePrefs = useCallback((patch: Partial<MixerPrefs>) => {
+    const { crossfaderCurve, syncMode, automix } = stateRef.current;
+    saveMixerPrefs({ crossfader: crossfaderCurve, syncMode, mixStyle: automix.style, ...patch });
+  }, []);
 
   /**
    * Any manual control move takes over from automix: the running transition stops, every
@@ -771,13 +785,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setCrossfaderCurve: useCallback((settings: CrossfaderSettings) => {
       applyCrossfaderCurve(settings);
       dispatch({ type: 'SET_CROSSFADER_CURVE', settings });
-      saveMixerPrefs({ crossfader: settings, syncMode: stateRef.current.syncMode });
-    }, []),
+      savePrefs({ crossfader: settings });
+    }, [savePrefs]),
 
     setSyncMode: useCallback((mode: SyncMode) => {
       dispatch({ type: 'SET_SYNC_MODE', mode });
-      saveMixerPrefs({ crossfader: stateRef.current.crossfaderCurve, syncMode: mode });
-    }, []),
+      savePrefs({ syncMode: mode });
+    }, [savePrefs]),
 
     setDeckLoop: useCallback((deck: 'A' | 'B', beats: number) => withLoop(deck, 'looped', (loop) => loop.autoLoop(beats)), [withLoop]),
     loopIn: useCallback((deck: 'A' | 'B') => withLoop(deck, 'loop in', (loop) => loop.loopIn()), [withLoop]),
@@ -893,6 +907,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       let planText = '';
       const chosen = stateRef.current.automix.startBar;
       const startBar = chosen && chosen.trackId === sourceTrackId ? chosen.bar : undefined;
+      const style = stateRef.current.automix.style;
       const plan = startAutomixTransition(sourceDeckId, sourceAnalysis, targetAnalysis, timing, {
         onIncomingStarted: () => {
           incomingStarted = true;
@@ -950,7 +965,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             }
           }
         },
-      }, startBar);
+      }, startBar, style);
       if (!plan) {
         dispatch({ type: 'SET_AUTOMIX_STATUS', status: 'Mix: could not start the transition' });
         return;
@@ -1020,6 +1035,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setAutomixDirection: useCallback((direction: TempoDirection) => {
       dispatch({ type: 'SET_AUTOMIX_DIRECTION', direction });
     }, []),
+
+    setMixStyle: useCallback((style: MixStyle) => {
+      dispatch({ type: 'SET_MIX_STYLE', style });
+      savePrefs({ mixStyle: style });
+    }, [savePrefs]),
 
     markPlayed: useCallback((trackId: string) => {
       dispatch({ type: 'MARK_PLAYED', trackId });

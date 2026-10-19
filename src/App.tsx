@@ -5,6 +5,7 @@ import { Browser, Deck, Mixer, Settings } from '@/components';
 import { BadMixButton } from '@/components/BadMixButton';
 import { NextMix } from '@/components/NextMix';
 import { SYNC_MODES } from '@/audio/engine/sync';
+import { MIX_STYLES, type MixStyle } from '@/audio/mix/mixPoints';
 import { loudnessTrimDb } from '@/audio/engine/curves';
 import type { MixMarks } from '@/components/Waveform';
 import { useAutoDj } from '@/store/useAutoDj';
@@ -233,11 +234,15 @@ export function App() {
       };
     }
     if (next.incoming === deck && track?.id === next.incomingTrackId) {
+      // An intro loop plays some bars more than once: the overlap covers that many fewer of the track's.
+      const intro = plan.incomingLoop;
+      const repeated = intro ? intro.repeats * intro.bars : 0;
       return {
         role: 'incoming',
         startBar: plan.incomingStartBar,
-        overlapBars: plan.overlapBars,
-        swapBar: plan.incomingStartBar + plan.bassSwapBar,
+        overlapBars: plan.overlapBars - repeated,
+        swapBar: plan.incomingStartBar + plan.bassSwapBar - repeated,
+        ...(intro ? { loop: { startBar: intro.startBar, bars: intro.bars, plays: intro.repeats + 1 } } : {}),
         live: next.live,
       };
     }
@@ -281,6 +286,18 @@ export function App() {
           <select value={state.syncMode} onChange={(e) => actions.setSyncMode(e.target.value as SyncMode)}>
             {SYNC_MODES.map(({ mode, label }) => (
               <option key={mode} value={mode}>
+                {label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label
+          className="topbar-sync"
+          title="How the next track comes in. Blend: the tracks overlap as they are. Loop: the incoming track holds a sparse phrase of its intro (kick, no bassline) on a loop while it fades in, then plays on into its drop on the bass swap; the outgoing track loops its last phrase when that helps">
+          <span>MIX</span>
+          <select value={state.automix.style} onChange={(e) => actions.setMixStyle(e.target.value as MixStyle)}>
+            {MIX_STYLES.map(({ style, label }) => (
+              <option key={style} value={style}>
                 {label}
               </option>
             ))}

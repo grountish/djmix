@@ -3,6 +3,7 @@
  * prints how tight it was.
  *
  *   npm run mixlab -- <outgoing> <incoming> [--out mix.wav] [--no-balance] [--json report.json]
+ *                     [--style blend|loop]
  *
  * MIXLAB_DEBUG=1 prints the aligned beats, the loudness curve and the forecast / measured
  * band rows.
@@ -28,18 +29,19 @@ export function parseArgs(
 }
 
 async function main(): Promise<void> {
-  const { files, options } = parseArgs(process.argv.slice(2), ['--out', '--json'], ['--no-balance']);
+  const { files, options } = parseArgs(process.argv.slice(2), ['--out', '--json', '--style'], ['--no-balance']);
   const wavPath = (options.get('--out') as string | undefined) ?? 'mixlab.wav';
   const jsonPath = options.get('--json') as string | undefined;
   const [outgoingFile, incomingFile] = files;
   if (!outgoingFile || !incomingFile) {
-    throw new Error('Usage: mixlab <outgoing> <incoming> [--out mix.wav] [--no-balance] [--json report.json]');
+    throw new Error('Usage: mixlab <outgoing> <incoming> [--out mix.wav] [--no-balance] [--json report.json] [--style blend|loop]');
   }
 
   const outgoing = await loadTrack(outgoingFile);
   const incoming = await loadTrack(incomingFile);
   const result = await renderTransition(outgoing, incoming, {
     policy: { balance: !options.has('--no-balance') },
+    style: options.get('--style') === 'loop' ? 'loop' : 'blend',
     wavPath,
   });
   console.log(result.report.plan);

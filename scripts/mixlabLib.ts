@@ -17,6 +17,7 @@ import { createStretchNode } from '../src/audio/engine/stretch';
 import { encodeWav } from '../src/audio/engine/wav';
 import { summarizeTransition, type TransitionChecks, type TransitionMetrics } from '../src/audio/mix/metrics';
 import { planTransition, type PlanPolicy, type TransitionPlan } from '../src/audio/mix/planner';
+import type { MixStyle } from '../src/audio/mix/mixPoints';
 import { renderWithRunner, TransitionRunner } from '../src/audio/mix/runner';
 import { trackClock } from '../src/audio/mix/trackClock';
 
@@ -59,6 +60,8 @@ export async function loadTrack(file: string, analysis?: AudioAnalysis): Promise
 
 export interface RenderOptions {
   policy?: Partial<PlanPolicy>;
+  /** 'blend' (default) or 'loop' (see MixStyle). */
+  style?: MixStyle;
   /** Writes the rendered master here. */
   wavPath?: string;
 }
@@ -101,16 +104,18 @@ export interface RenderResult {
  */
 export async function renderTransition(outgoing: LoadedTrack, incoming: LoadedTrack, options: RenderOptions = {}): Promise<RenderResult> {
   const clockOut = trackClock(outgoing.analysis);
-  const policy = options.policy;
+  const { policy, style } = options;
   const draft = planTransition({
     outgoing: { analysis: outgoing.analysis, trackTime: 0, rate: 1, semitones: 0 },
     incoming: { analysis: incoming.analysis },
+    style,
     policy,
   });
   const startTrackTime = Math.max(0, clockOut.timeOf((draft.outgoingRampStartBar - RUN_IN_BARS) * 4));
   const plan = planTransition({
     outgoing: { analysis: outgoing.analysis, trackTime: startTrackTime, rate: 1, semitones: 0 },
     incoming: { analysis: incoming.analysis },
+    style,
     policy,
   });
 

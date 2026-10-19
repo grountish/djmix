@@ -210,15 +210,23 @@ export class TransitionRunner {
     }
   }
 
-  /** Cues the incoming deck, locks it beat for beat, then eases it back to its own tempo. */
+  /**
+   * Cues the incoming deck, locks it beat for beat, then eases it back to its own tempo. With an
+   * intro loop its beats run along the looped timeline: each time it reaches the loop's end
+   * while repeats are left, the deck is sent back to the loop's start (a 'jump').
+   */
   private startIncoming(startBeat: number, endBeat: number): void {
     const { player, clock } = this.incoming;
+    const loop = this.plan.incomingLoop;
     const firstBeat = this.plan.incomingStartBar * 4;
     const overlapBeats = endBeat - startBeat;
     const planned = this.plan.tempo.incomingRate;
+    // Track beat playing at overlap beat j, and how long it lasts in track time.
+    const trackBeat = (j: number) => loopedTrackBar(loop, (firstBeat + j) / 4) * 4;
+    const beatLength = (j: number) => clock.timeOf(trackBeat(j) + 1) - clock.timeOf(trackBeat(j));
+    const wrapsAt = (j: number) => j > 0 && trackBeat(j) !== trackBeat(j - 1) + 1;
     const lockRate = (j: number) =>
-      (clock.timeOf(firstBeat + j + 1) - clock.timeOf(firstBeat + j)) /
-      (this.outgoingBeats.get(startBeat + j + 1)! - this.outgoingBeats.get(startBeat + j)!);
+      beatLength(j) / (this.outgoingBeats.get(startBeat + j + 1)! - this.outgoingBeats.get(startBeat + j)!);
     this.lockAbandoned = Array.from({ length: overlapBeats }, (_, j) => lockRate(j)).some(
       (rate) => Math.abs(rate / planned - 1) > MAX_LOCK_DEVIATION,
     );
@@ -235,21 +243,26 @@ export class TransitionRunner {
 
     for (let j = 1; j < overlapBeats; j++) {
       const next = beatRate(j);
-      if (Math.abs(next - rate) > RATE_EPSILON) {
-        this.queues.incoming.push({ at: this.outgoingBeats.get(startBeat + j)!, kind: 'rate', rate: next });
+      const at = this.outgoingBeats.get(startBeat + j)!;
+      if (wrapsAt(j)) {
+        this.queues.incoming.push({ at, kind: 'jump', trackTime: clock.timeOf(trackBeat(j)), rate: next });
+        rate = next;
+      } else if (Math.abs(next - rate) > RATE_EPSILON) {
+        this.queues.incoming.push({ at, kind: 'rate', rate: next });
         rate = next;
       }
     }
 
-    // After the overlap the incoming track leads; ease it back to its own tempo.
+    // After the overlap the incoming track leads (its loop is over by the swap); ease it back
+    // to its own tempo.
     const rampBeats = this.plan.tempo.incomingRampBars * 4;
-    let beat = firstBeat + overlapBeats;
+    let j = overlapBeats;
     let time = this.overlapEnd;
     const from = rate;
-    for (let n = 0; n < rampBeats; n++, beat++) {
+    for (let n = 0; n < rampBeats; n++, j++) {
       rate = from * Math.pow(1 / from, (n + 1) / rampBeats);
       this.queues.incoming.push({ at: time, kind: 'rate', rate });
-      time += (clock.timeOf(beat + 1) - clock.timeOf(beat)) / rate;
+      time += beatLength(j) / rate;
     }
     this.finishTime = time;
   }

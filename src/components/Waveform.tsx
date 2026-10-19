@@ -11,8 +11,11 @@ export interface MixMarks {
   overlapBars: number;
   /** Bar of the bass swap. */
   swapBar: number;
-  /** Outgoing track only: the phrase repeated under the blend. */
-  loop?: { startBar: number; bars: number };
+  /**
+   * The phrase repeated under the blend: the outgoing track's until it stops, the incoming
+   * track's intro `plays` times before it plays on.
+   */
+  loop?: { startBar: number; bars: number; plays?: number };
   /** True while the mix is being played. */
   live: boolean;
 }
@@ -77,9 +80,11 @@ function drawMarks(
   const alpha = marks.live ? 1 : 0.7;
   const barX = (bar: number) => x(clock.timeOf(bar * 4));
   const loopEnd = marks.loop ? marks.loop.startBar + marks.loop.bars : Infinity;
+  // The outgoing track repeats from its loop's end on, so its band (and swap) can't be drawn
+  // past it; the incoming track plays on after its loop, and its marks are in its own bars.
+  const drawnEnd = marks.role === 'outgoing' ? loopEnd : Infinity;
   const x0 = barX(marks.startBar);
-  // The band stops at the loop's end: from there the track repeats and can't be drawn in line.
-  const x1 = barX(Math.min(marks.startBar + marks.overlapBars, loopEnd));
+  const x1 = barX(Math.min(marks.startBar + marks.overlapBars, drawnEnd));
   const visible = (a: number, b: number) => b >= 0 && a <= w;
   ctx.save();
   if (marks.overlapBars > 0 && visible(x0, x1)) {
@@ -110,7 +115,8 @@ function drawMarks(
       ctx.setLineDash([]);
       if (labels && lx0 >= 0 && lx0 <= w) {
         ctx.fillStyle = `rgba(${LOOP_RGB},${alpha})`;
-        ctx.fillText('LOOP', lx0 + 4, h - 12);
+        // A line above the entry and swap labels: an intro loop usually starts on the entry.
+        ctx.fillText(marks.loop.plays ? `LOOP ${marks.loop.plays}×` : 'LOOP', lx0 + 4, h - 24);
       }
     }
   }
@@ -131,7 +137,7 @@ function drawMarks(
   };
   const entry = marks.overlapBars === 0 ? 'CUT' : marks.role === 'incoming' ? 'IN' : 'MIX';
   line(x0, entry, false);
-  if (marks.overlapBars > 0 && marks.swapBar < loopEnd) line(barX(marks.swapBar), 'SWAP', true);
+  if (marks.overlapBars > 0 && marks.swapBar < drawnEnd) line(barX(marks.swapBar), 'SWAP', true);
   ctx.restore();
 }
 

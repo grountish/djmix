@@ -3,7 +3,7 @@ import type { AudioAnalysis, TrackKey } from '../analysis/types';
 import { loudnessTrimDb } from '../engine/curves';
 import { balancePlan, type BalanceReport } from './balance';
 import { bestKeyShift, harmonicScore, MIN_KEY_SHIFT_CONFIDENCE, transpose } from './harmonic';
-import { chooseMixPoints, type MixTiming, type OutgoingLoop } from './mixPoints';
+import { chooseMixPoints, type IncomingLoop, type MixStyle, type MixTiming, type OutgoingLoop } from './mixPoints';
 import { DEFAULT_TEMPO_POLICY, planTempo, type TempoPlan, type TempoPolicy } from './tempoPlan';
 import { blendTemplate, cutTemplate, type Lane } from './templates';
 import { trackClock } from './trackClock';
@@ -51,6 +51,8 @@ export interface PlanInput {
   timing?: MixTiming;
   /** The user's choice of outgoing bar for the overlap to start on (see MixPointInput). */
   startBar?: number;
+  /** 'blend' (default) or 'loop' (see MixStyle). */
+  style?: MixStyle;
   policy?: Partial<PlanPolicy>;
 }
 
@@ -71,6 +73,11 @@ export interface TransitionPlan {
    * the blend; outgoing bars above count along the looped timeline.
    */
   outgoingLoop?: OutgoingLoop;
+  /**
+   * A sparse intro phrase the incoming track repeats while it fades in (loop style); incoming
+   * bars of the overlap count along the looped timeline, the cue is before it.
+   */
+  incomingLoop?: IncomingLoop;
   /** Key-lock pitch shift for the incoming track. */
   incomingSemitones: number;
   harmonic: { score: number; outgoingKey: string; incomingKey: string };
@@ -109,6 +116,7 @@ export function planTransition(input: PlanInput): TransitionPlan {
     maxOverlapBars: tempo.canBlend ? policy.maxOverlapBars : 0,
     timing: input.timing,
     startBar: input.startBar,
+    style: input.style,
   });
 
   const blend = tempo.canBlend && points.overlapBars > 0;
@@ -119,6 +127,7 @@ export function planTransition(input: PlanInput): TransitionPlan {
     if (!analysis.tempo.isConstant) warnings.push(`${name} track's tempo drifts`);
     if (analysis.downbeatConfidence < 0.2) warnings.push(`${name} track's downbeat is uncertain`);
   }
+  if (input.style === 'loop' && blend && !points.incomingLoop) warnings.push('No intro loop fits: a plain blend');
 
   const plan: TransitionPlan = {
     kind: blend ? 'blend' : 'cut',
@@ -129,6 +138,7 @@ export function planTransition(input: PlanInput): TransitionPlan {
     incomingStartBar: points.incomingStartBar,
     bassSwapBar: points.bassSwapBar,
     ...(blend && points.outgoingLoop ? { outgoingLoop: points.outgoingLoop } : {}),
+    ...(blend && points.incomingLoop ? { incomingLoop: points.incomingLoop } : {}),
     incomingSemitones: shift,
     harmonic: { score, outgoingKey: toCamelot(outgoingKey), incomingKey: toCamelot(incomingKey) },
     lanes: blend ? blendTemplate(points.overlapBars, points.bassSwapBar) : cutTemplate(),
