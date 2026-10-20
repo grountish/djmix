@@ -10,6 +10,14 @@ https://miltonmannarino.github.io/djmix-features/ — what changed, how to test,
 Shared dev server: Vite on :5173 (+ Electron). The live tests (`npm run test:live`) start their
 own Vite on :5174 with HMR off, so edits don't reload the page under a running test.
 
+## Session 6e8d1284 — phrase grid accuracy + more loop mixes — IN PROGRESS (2026-10-20)
+
+User: only 1 of 6 mixes used a loop; the mix often misses the 32-beat (8-bar) phrase. Audit the
+phrase grid / downbeat on the real library, fix the analysis, then widen what the loop style
+can hold. Files: `src/audio/analysis/structure.ts`, `downbeat.ts`, `beatGrid.ts` (if the
+downbeat is the cause), `types.ts` (ANALYZER_VERSION), `src/audio/mix/mixPoints.ts` (+tests),
+`fixtures/analysis-baseline.json`, `scripts/analyze*.ts`.
+
 ## Session 6e8d1284 — "Loop" mix style — DONE `512961c` (2026-10-19)
 
 MIX picker in the top bar (Blend / Loop, persisted in `mixerPrefs`). Loop: `chooseMixPoints`
