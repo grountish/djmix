@@ -10,10 +10,10 @@ https://miltonmannarino.github.io/djmix-features/ — what changed, how to test,
 Shared dev server: Vite on :5173 (+ Electron). The live tests (`npm run test:live`) start their
 own Vite on :5174 with HMR off, so edits don't reload the page under a running test.
 
-## Session 6e8d1284 — zoomed waveform flicker — IN PROGRESS (2026-10-20)
+## Session 6e8d1284 — zoomed waveform flicker — DONE `244de2c` (2026-10-20)
 
-Zoomed deck waveform shimmers while scrolling (start index rounded to whole bins, span flips ±1,
-one sample per pixel). Touching `src/components/Waveform.tsx` (+ a test).
+Zoomed waveform columns on a fixed time grid (`waveColumns.ts`), view origin in whole pixels
+shared by grid and marks. Every file is free.
 
 ## Session 6e8d1284 — Loop enters early (first beat phrase held) — DONE `ad727ce` (2026-10-20)
 
