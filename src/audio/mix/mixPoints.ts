@@ -43,8 +43,10 @@ export type MixTiming = 'now' | 'end';
  * 'blend': the tracks overlap as they are; the outgoing one loops only when it runs out of bars.
  * 'loop': the incoming track holds a sparse phrase of its intro (anything short of kick and
  * bassline together: pads, percussion, a kick or a bassline alone) on a loop while it fades in,
- * then plays on into its drop; the outgoing loops its last kick phrase whenever that makes the
- * blend better, not only when it is short of bars.
+ * then plays on into its drop; a track whose beat starts on its drop holds its first beat phrase
+ * instead (its bass is cut until the swap). It enters early, never past its first drop. The
+ * outgoing loops its last kick phrase whenever that makes the blend better, not only when it is
+ * short of bars.
  */
 export type MixStyle = 'blend' | 'loop';
 
@@ -234,6 +236,18 @@ const INTRO_REPEAT_WEIGHT = 1;
  * the swap on the incoming track needs its kick as in a blend.
  */
 const LOOP_STYLE_BEATLESS_WEIGHT = 1 / 16;
+/**
+ * Loop style: per bar of the incoming track's full energy held on the loop with its bass cut,
+ * linear (the first beat phrase of a track without a sparse intro, looped while it fades in).
+ */
+const LOOP_STYLE_HEADLESS_WEIGHT = 1 / 16;
+/**
+ * Loop style: per bar of the incoming track's beat skipped at the cue. The loop is how a short
+ * intro carries the blend, so the track enters on its first beat phrase (the user's rule: loop
+ * the first bars after a beatless intro rather than enter later on a vocal or a drop); a long
+ * intro is still entered further in when that lands its drop on the swap.
+ */
+const LOOP_STYLE_SKIP_WEIGHT = 0.25;
 /** Each repeat of the loop is heard as one; a couple pass as an extended outro, more don't. */
 const LOOP_WRAP_WEIGHT = 1.5;
 const MAX_LOOP_WRAPS = 2;
@@ -274,23 +288,25 @@ export function chooseMixPoints(input: MixPointInput): MixPoints {
   const bassOut = barFlags(outgoing.phrases, outgoing.barCount, (p) => p.hasBass);
   const kickIn = barFlags(incoming.phrases, incoming.barCount, (p) => p.hasKick);
   const fullIn = barFlags(incoming.phrases, incoming.barCount, (p) => p.hasKick && p.hasBass);
+  const firstKick = kickIn ? Math.max(0, kickIn.indexOf(true)) : 0;
   const exits = energyExits(outgoing.phrases);
   const entries = energyEntries(incoming.phrases);
   const nowEntries = input.timing === 'now' ? entryBars(outgoing.phrases, gridOut) : [];
   const firstEntry = nowEntries.find((bar) => bar >= earliest);
 
-  // Cues sit on the incoming phrase grid, so its phrases land on the outgoing ones. They reach
-  // as far as its last drop: a track whose first kick section is short may be better entered
-  // later, at the cost of the music skipped.
+  const loopStyle = input.style === 'loop';
+  // Cues sit on the incoming phrase grid, so its phrases land on the outgoing ones. For a blend
+  // they reach as far as its last drop: a track whose first kick section is short may be better
+  // entered later, at the cost of the music skipped. The loop style holds its first phrases on
+  // a loop instead, and enters no later than its first drop.
   const latestCue = Math.floor(incoming.barCount * MAX_CUE_FRACTION);
-  const lastEntry = Math.min(latestCue, entries.length ? entries[entries.length - 1] : drop);
+  const lastEntry = Math.min(latestCue, loopStyle ? (entries[0] ?? drop) : entries.length ? entries[entries.length - 1] : drop);
   const cues: number[] = [];
   for (const bar of gridIn.lines) if (bar <= lastEntry) cues.push(bar);
   // A track whose first drop comes before its first line (or that has none) enters on that line.
   if (cues.length === 0) cues.push(gridIn.lines[0]);
 
   const forcedStart = input.startBar !== undefined && input.startBar >= earliest ? input.startBar : undefined;
-  const loopStyle = input.style === 'loop';
 
   // The incoming track as the overlap hears it: with an intro loop its bars run along the looped
   // timeline, so everything from the loop's end on (its drops) comes that many bars later. The
@@ -373,6 +389,7 @@ export function chooseMixPoints(input: MixPointInput): MixPoints {
             // The intro loop is over by the swap: the incoming bass comes in with the track playing on.
             if (intro && introEnd > cue + swap) continue;
             let score = LENGTH_WEIGHT * overlap - timing - drifted - SKIP_WEIGHT * Math.max(0, cue - drop);
+            if (loopStyle) score -= LOOP_STYLE_SKIP_WEIGHT * Math.max(0, cue - firstKick);
             // Before the swap the outgoing kick carries the beat; the incoming carries it after,
             // and should have a groove to enter on before.
             let beatless = 0;
@@ -382,7 +399,9 @@ export function chooseMixPoints(input: MixPointInput): MixPoints {
               score -= LOOP_STYLE_BEATLESS_WEIGHT * countFalse(kickIn, cue, swap);
               score -= BEATLESS_WEIGHT * countFalse(kickIn, cue + swap, overlap - swap) ** 2;
             } else score -= BEATLESS_WEIGHT * countFalse(kickIn, cue, overlap) ** 2;
-            score -= HEADLESS_WEIGHT * countTrue(fullIn, cue, swap) ** 2;
+            // Bars of the intro loop are the technique in the loop style; the rest the track as it is.
+            const held = intro ? countTrue(fullIn, Math.max(cue, intro.startBar), introEnd - Math.max(cue, intro.startBar)) : 0;
+            score -= HEADLESS_WEIGHT * (countTrue(fullIn, cue, swap) - held) ** 2 + LOOP_STYLE_HEADLESS_WEIGHT * held;
             const swapBar = cue + swap;
             if (entries.includes(swapBar)) score += DROP_ON_SWAP;
             else {
@@ -411,7 +430,7 @@ export function chooseMixPoints(input: MixPointInput): MixPoints {
 
   const intros: (IncomingLoop | undefined)[] = [undefined];
   if (loopStyle) {
-    for (const window of introLoopCandidates(incoming.phrases, gridIn, entries[0] ?? incoming.barCount, fullIn)) {
+    for (const window of introLoopCandidates(incoming.phrases, gridIn, entries[0] ?? incoming.barCount, fullIn, kickIn, firstKick)) {
       for (let repeats = 1; repeats * window.bars <= MAX_INTRO_EXTRA_BARS; repeats++) intros.push({ ...window, repeats });
     }
   }
@@ -485,9 +504,19 @@ function loopCandidates(barCount: number, grid: PhraseGrid, earliest: number, ki
  * Stretches of the incoming intro that can be held on a loop while it fades in: a phrase on its
  * grid (or half of one, on the half-phrase grid), before `until` (its first drop), without the
  * full energy of kick and bassline together, and not a fade-in or near-silence. A kick to lock
- * on isn't needed: the outgoing track carries the beat until the swap.
+ * on isn't needed: the outgoing track carries the beat until the swap. Also the first phrase
+ * with a kick throughout from `firstKick` on, up to the first drop's own first phrase, whatever
+ * else it carries: with its bass cut it is the drum loop a DJ would hold on a track that has no
+ * sparse intro (one that opens on its drop, or after a few beatless bars).
  */
-function introLoopCandidates(phrases: Phrase[], grid: PhraseGrid, until: number, full: boolean[] | null): OutgoingLoop[] {
+function introLoopCandidates(
+  phrases: Phrase[],
+  grid: PhraseGrid,
+  until: number,
+  full: boolean[] | null,
+  kick: boolean[] | null,
+  firstKick: number,
+): OutgoingLoop[] {
   const loudest = Math.max(...phrases.map((p) => p.energyDb));
   const quiet = (bar: number) => {
     const phrase = phrases.find((p) => bar >= p.startBar && bar < p.startBar + p.bars);
@@ -508,6 +537,15 @@ function introLoopCandidates(phrases: Phrase[], grid: PhraseGrid, until: number,
       for (let bar = start; bar < start + bars && audible; bar++) if (quiet(bar)) audible = false;
       if (audible) loops.push({ startBar: start, bars });
     }
+  }
+  // The drop's own first phrase starts on its first line (after a pickup, on a track that opens on it).
+  const lastBeat = grid.nextLine(until) ?? until;
+  const beat = grid.lines.find(
+    (line) =>
+      line >= firstKick && line <= lastBeat && wholePhrase(grid, line, kick?.length ?? 0) && countTrue(kick, line, PHRASE_BARS) === PHRASE_BARS,
+  );
+  if (beat !== undefined && !loops.some((loop) => loop.startBar === beat && loop.bars === PHRASE_BARS)) {
+    loops.push({ startBar: beat, bars: PHRASE_BARS });
   }
   return loops;
 }
