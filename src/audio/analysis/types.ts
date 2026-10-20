@@ -1,5 +1,5 @@
 /** Bumped whenever analysis output changes, so cached results are recomputed. */
-export const ANALYZER_VERSION = 8;
+export const ANALYZER_VERSION = 9;
 
 /** What is known about a track before it is analysed (its file tags). */
 export interface AnalysisHints {

@@ -11,7 +11,7 @@
     "keySource": "audio",
     "lufs": -5.78,
     "bars": 63,
-    "phrases": "In1 In8 Dr16 Out16 Out8 Out14",
+    "phrases": "In1 In8 Dr16 Out16 Out8 Out8 Out6",
     "tagBpm": 135,
     "tagKey": "11A"
   },
@@ -27,7 +27,7 @@
     "keySource": "audio",
     "lufs": -9.55,
     "bars": 226,
-    "phrases": "In8 Dr200 Out8 Out10",
+    "phrases": "In6 Dr208 Out8 Out4",
     "tagBpm": 116,
     "tagKey": "9A"
   },
@@ -43,7 +43,7 @@
     "keySource": "audio",
     "lufs": -11.83,
     "bars": 222,
-    "phrases": "Dr8 Bu16 Dr72 Bd8 Dr88 Out8 Out22",
+    "phrases": "Dr8 Bu16 Dr48 Bd4 Dr24 Bd8 Dr88 Out8 Out16 Out2",
     "tagBpm": 123,
     "tagKey": "4A"
   },
@@ -75,7 +75,7 @@
     "keySource": "audio",
     "lufs": -10.52,
     "bars": 73,
-    "phrases": "Dr73",
+    "phrases": "Dr1 Dr72",
     "tagBpm": 68,
     "tagKey": "10A"
   },
@@ -91,7 +91,7 @@
     "keySource": "audio",
     "lufs": -8.47,
     "bars": 106,
-    "phrases": "In2 Dr16 Bd32 Dr16 Bd24 Dr8 Out8",
+    "phrases": "In3 Dr16 Bd24 Dr8 Bd8 Dr8 Bd24 Dr8 Out7",
     "tagBpm": 180,
     "tagKey": "5B"
   },
@@ -107,7 +107,7 @@
     "keySource": "audio",
     "lufs": -14.33,
     "bars": 28,
-    "phrases": "In2 Dr26",
+    "phrases": "In2 Dr24 Dr2",
     "tagBpm": 65,
     "tagKey": "2A"
   },
@@ -123,7 +123,7 @@
     "keySource": "audio",
     "lufs": -10.67,
     "bars": 122,
-    "phrases": "In25 In40 Dr24 Out24 Out9",
+    "phrases": "In4 In24 In40 Dr24 Out16 Out8 Out6",
     "tagBpm": 75,
     "tagKey": "10A"
   },
@@ -139,7 +139,7 @@
     "keySource": "audio",
     "lufs": -7.5,
     "bars": 113,
-    "phrases": "In2 In8 Dr103",
+    "phrases": "In2 In8 Dr96 Dr7",
     "tagBpm": 112,
     "tagKey": "3A"
   },
@@ -155,7 +155,7 @@
     "keySource": "audio",
     "lufs": -10.35,
     "bars": 29,
-    "phrases": "In2 Dr24 Out3",
+    "phrases": "In4 Dr24 Out1",
     "tagBpm": 56,
     "tagKey": "5A"
   },
@@ -171,7 +171,7 @@
     "keySource": "audio",
     "lufs": -9.2,
     "bars": 156,
-    "phrases": "Dr148 Out8",
+    "phrases": "Dr4 Dr144 Out8",
     "tagBpm": 132,
     "tagKey": "7A"
   },
@@ -219,7 +219,7 @@
     "keySource": "audio",
     "lufs": -10.72,
     "bars": 47,
-    "phrases": "In1 Dr8 Out38",
+    "phrases": "In1 Dr8 Out32 Out6",
     "tagBpm": 70,
     "tagKey": "8A"
   },
@@ -235,7 +235,7 @@
     "keySource": "audio",
     "lufs": -10.49,
     "bars": 145,
-    "phrases": "In8 Dr16 Out8 Out72 Out16 Out24 Out1",
+    "phrases": "In1 In8 Dr8 Out8 Out8 Out72 Out16 Out24",
     "tagBpm": 150,
     "tagKey": "10A"
   },
@@ -267,7 +267,7 @@
     "keySource": "audio",
     "lufs": -5.75,
     "bars": 85,
-    "phrases": "In3 Dr24 Out58",
+    "phrases": "In3 Dr24 Out56 Out2",
     "tagBpm": 94,
     "tagKey": "7B"
   },
@@ -347,7 +347,7 @@
     "keySource": "audio",
     "lufs": -11.52,
     "bars": 130,
-    "phrases": "In10 Dr48 Bd8 Dr56 Out8",
+    "phrases": "In8 Dr48 Dr2 Bd8 Dr56 Out8",
     "tagBpm": 120,
     "tagKey": "2A"
   },
@@ -363,7 +363,7 @@
     "keySource": "audio",
     "lufs": -8.9,
     "bars": 72,
-    "phrases": "In5 Dr8 Bd16 Dr8 Out32 Out3",
+    "phrases": "In4 Dr8 Bd16 Dr8 Out32 Out4",
     "tagBpm": 134,
     "tagKey": "3A"
   },
@@ -379,7 +379,7 @@
     "keySource": "audio",
     "lufs": -10.65,
     "bars": 157,
-    "phrases": "In7 Dr16 Bd8 Dr8 Bd16 Dr8 Bd24 Bd8 Bd32 Dr8 Out8 Out14",
+    "phrases": "In3 In4 Dr16 Bd8 Dr8 Bd16 Dr8 Bd24 Bd8 Bd32 Dr8 Out8 Out8 Out6",
     "tagBpm": 85,
     "tagKey": "7A"
   },
@@ -395,7 +395,7 @@
     "keySource": "audio",
     "lufs": -13.48,
     "bars": 58,
-    "phrases": "In6 Dr48 Out4",
+    "phrases": "In7 Dr40 Out8 Out3",
     "tagBpm": 70,
     "tagKey": "5A"
   },
@@ -427,7 +427,7 @@
     "keySource": "audio",
     "lufs": -9.74,
     "bars": 161,
-    "phrases": "In8 Dr24 Bd8 Dr64 Bd40 Dr16 Out1",
+    "phrases": "In2 In8 Dr24 Bd8 Dr32 Bd8 Dr24 Bd40 Dr8 Dr7",
     "tagBpm": 128,
     "tagKey": "5B"
   },
@@ -459,7 +459,7 @@
     "keySource": "audio",
     "lufs": -11.67,
     "bars": 152,
-    "phrases": "In32 Dr32 Bu24 Dr48 Out16",
+    "phrases": "In7 In24 Dr32 Bu24 Dr48 Out16 Out1",
     "tagBpm": 144,
     "tagKey": "8A"
   },
@@ -475,7 +475,7 @@
     "keySource": "audio",
     "lufs": -11.49,
     "bars": 257,
-    "phrases": "In24 In56 In16 In16 In16 Dr40 Bd8 Dr32 Out49",
+    "phrases": "In24 In56 In16 In16 In16 Dr40 Bd8 Dr32 Out48 Out1",
     "tagBpm": 124,
     "tagKey": "10B"
   },
@@ -491,7 +491,7 @@
     "keySource": "audio",
     "lufs": -12.84,
     "bars": 179,
-    "phrases": "In17 In16 In32 Dr104 Out8 Out2",
+    "phrases": "In1 In16 In16 In32 Dr40 Dr4 Bu8 Dr56 Out6",
     "tagBpm": 150,
     "tagKey": "10A"
   },
@@ -507,7 +507,7 @@
     "keySource": "audio",
     "lufs": -9.73,
     "bars": 93,
-    "phrases": "In4 Dr24 Bd8 Dr8 Bd8 Dr24 Out16 Out1",
+    "phrases": "Dr6 Dr24 Bd8 Dr8 Bu8 Dr8 Bd8 Dr8 Out8 Out7",
     "tagBpm": 80,
     "tagKey": "7B"
   },
@@ -539,7 +539,7 @@
     "keySource": "audio",
     "lufs": -8.05,
     "bars": 254,
-    "phrases": "In1 Dr64 Bd16 Dr24 Bd24 Dr64 Bd8 Bd8 Dr45",
+    "phrases": "In1 Dr64 Bd16 Dr24 Bd24 Dr64 Bd8 Bd8 Dr40 Dr5",
     "tagBpm": 120,
     "tagKey": "7A"
   },
@@ -571,7 +571,7 @@
     "keySource": "audio",
     "lufs": -10.05,
     "bars": 83,
-    "phrases": "Dr83",
+    "phrases": "Dr80 Dr3",
     "tagBpm": 134,
     "tagKey": "2A"
   },
@@ -587,7 +587,7 @@
     "keySource": "audio",
     "lufs": -11.58,
     "bars": 166,
-    "phrases": "In20 Dr128 Out8 Out10",
+    "phrases": "In16 Dr136 Out8 Out6",
     "tagBpm": 152,
     "tagKey": "3B"
   },
@@ -603,7 +603,7 @@
     "keySource": "audio",
     "lufs": -8.12,
     "bars": 97,
-    "phrases": "Dr1 Dr8 Dr88",
+    "phrases": "Dr1 Dr8 Dr32 Dr4 Dr48 Out4",
     "tagBpm": 131,
     "tagKey": "12A"
   },
@@ -619,7 +619,7 @@
     "keySource": "audio",
     "lufs": -9.95,
     "bars": 165,
-    "phrases": "In9 Dr8 Out24 Out8 Out16 Out24 Out8 Out8 Out48 Out12",
+    "phrases": "In2 In8 Dr32 Bu8 Dr16 Bu24 Dr8 Bd8 Dr48 Out8 Out3",
     "tagBpm": 125,
     "tagKey": "7A"
   },
@@ -651,7 +651,7 @@
     "keySource": "audio",
     "lufs": -12.94,
     "bars": 173,
-    "phrases": "Dr12 Dr88 Bd16 Dr24 Dr8 Dr24 Out1",
+    "phrases": "Dr2 Dr8 Dr88 Bd8 Dr32 Dr8 Dr24 Out3",
     "tagBpm": 190,
     "tagKey": "11A"
   },

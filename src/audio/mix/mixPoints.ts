@@ -41,9 +41,10 @@ export type MixTiming = 'now' | 'end';
 
 /**
  * 'blend': the tracks overlap as they are; the outgoing one loops only when it runs out of bars.
- * 'loop': the incoming track holds a sparse phrase of its intro (kick, no bassline) on a loop while
- * it fades in, then plays on into its drop; the outgoing loops its last kick phrase whenever that
- * makes the blend better, not only when it is short of bars.
+ * 'loop': the incoming track holds a sparse phrase of its intro (anything short of kick and
+ * bassline together: pads, percussion, a kick or a bassline alone) on a loop while it fades in,
+ * then plays on into its drop; the outgoing loops its last kick phrase whenever that makes the
+ * blend better, not only when it is short of bars.
  */
 export type MixStyle = 'blend' | 'loop';
 
@@ -106,14 +107,56 @@ export function loopWrapsBy(loop: OutgoingLoop | IncomingLoop | undefined, bar: 
   return 'repeats' in loop ? Math.min(loop.repeats, wraps) : wraps;
 }
 
-/** Offset of the 8-bar phrase grid: phrases start on it (bar 0 aside). */
-export function phraseOrigin(phrases: Phrase[]): number {
-  const first = phrases.find((p) => p.startBar > 0);
-  return first ? first.startBar % PHRASE_BARS : 0;
+/**
+ * A track's phrase lines, read off its sections: a line every 8 bars from each section's start,
+ * except where fewer than 8 bars of it are left (a break that moves the grid stands alone as a
+ * section shorter than two phrases), and a first section that isn't a whole number of phrases
+ * (a pickup before the grid, or one an older analysis merged with what followed) has its lines
+ * after the pickup. The track's last section runs on the grid to the end. The grid can move
+ * within a track (see `choosePhraseLines`).
+ */
+export interface PhraseGrid {
+  /** Ascending. */
+  lines: number[];
+  isLine: (bar: number) => boolean;
+  /** Lines and the middle of every regular phrase (half a phrase before the first line too). */
+  isHalfLine: (bar: number) => boolean;
+  /** Bars before the first line when the track starts off the grid; 0 otherwise. */
+  pickup: number;
+  /** The first line at or after `bar`. */
+  nextLine: (bar: number) => number | undefined;
 }
 
-function onGrid(bar: number, origin: number): boolean {
-  return (((bar - origin) % PHRASE_BARS) + PHRASE_BARS) % PHRASE_BARS === 0;
+export function phraseGrid(phrases: Phrase[]): PhraseGrid {
+  const lines: number[] = [];
+  let pickup = 0;
+  phrases.forEach((phrase, i) => {
+    const end = phrase.startBar + phrase.bars;
+    const last = i === phrases.length - 1;
+    let first = phrase.startBar;
+    // A lone section says nothing about where the grid starts: it starts on bar 0.
+    if (i === 0 && phrase.bars % PHRASE_BARS !== 0 && !last) {
+      pickup = phrase.bars % PHRASE_BARS;
+      first += pickup;
+    }
+    for (let bar = first; bar < end; bar += PHRASE_BARS) {
+      if (bar === first || last || end - bar >= PHRASE_BARS) lines.push(bar);
+    }
+  });
+  if (lines.length === 0) lines.push(0);
+  const set = new Set(lines);
+  const half = new Set(lines);
+  lines.forEach((bar, i) => {
+    if (lines[i + 1] === bar + PHRASE_BARS) half.add(bar + PHRASE_BARS / 2);
+  });
+  if (lines[0] >= PHRASE_BARS / 2) half.add(lines[0] - PHRASE_BARS / 2);
+  return {
+    lines,
+    isLine: (bar) => set.has(bar),
+    isHalfLine: (bar) => half.has(bar),
+    pickup,
+    nextLine: (bar) => lines.find((line) => line >= bar),
+  };
 }
 
 /** First bar of the incoming track's main section: where its intro ends. */
@@ -169,15 +212,28 @@ const SKIP_WEIGHT = 0.05;
 const MAX_CUE_FRACTION = 0.25;
 /** A blend shorter than this is worth looping the outgoing track for. */
 const LOOP_BELOW_BARS = 16;
-/** Loop style: the incoming intro phrase is played at most this many extra times. */
-const MAX_INTRO_REPEATS = 3;
+/** Loop style: the incoming intro is held for at most this many extra bars. */
+const MAX_INTRO_EXTRA_BARS = 3 * PHRASE_BARS;
+/** Loop style: a whole phrase, or half of one where the intro is too short for a whole one. */
+const INTRO_LOOP_BARS = [PHRASE_BARS, PHRASE_BARS / 2];
+/**
+ * Loop style: a phrase quieter than the track's loudest by more than this is a fade-in or
+ * near-silence, not an intro to hold.
+ */
+const INTRO_LOOP_MIN_LEVEL_DB = -18;
 /**
  * Loop style: holding the incoming intro on a loop is what the style is for, so it wins over a
- * plain blend that scores about the same; each repeat costs a point, so it loops no more than
- * the blend needs (to bring the drop onto the swap, to stretch a short intro over the fade-in).
+ * plain blend that scores about the same; each extra phrase costs a point, so it loops no more
+ * than the blend needs (to bring the drop onto the swap, to stretch a short intro over the fade-in).
  */
 const INTRO_LOOP_BONUS = 4;
 const INTRO_REPEAT_WEIGHT = 1;
+/**
+ * Loop style: per beatless incoming bar before the swap, linear. The outgoing kick carries the
+ * beat until then, so a pad or percussion intro under it is the technique, not a flaw; from
+ * the swap on the incoming track needs its kick as in a blend.
+ */
+const LOOP_STYLE_BEATLESS_WEIGHT = 1 / 16;
 /** Each repeat of the loop is heard as one; a couple pass as an extended outro, more don't. */
 const LOOP_WRAP_WEIGHT = 1.5;
 const MAX_LOOP_WRAPS = 2;
@@ -192,6 +248,11 @@ const BASS_HOLE_TOLERANCE_DB = 3;
 const MAX_BASS_HOLE_DB = 30;
 /** Bars averaged on each side of the swap for the hole. */
 const BASS_HOLE_BARS = 2;
+/**
+ * Per overlap bar after either track's phrase lines stop meeting the other's: a grid that
+ * moves (a 4-bar break) inside the blend puts every phrase after it half a phrase off.
+ */
+const PHRASE_DRIFT_WEIGHT = 0.5;
 
 /**
  * Where to mix. Both tracks change on their phrase grids at the same moment. Every
@@ -205,8 +266,8 @@ const BASS_HOLE_BARS = 2;
  */
 export function chooseMixPoints(input: MixPointInput): MixPoints {
   const { outgoing, incoming } = input;
-  const originOut = phraseOrigin(outgoing.phrases);
-  const originIn = phraseOrigin(incoming.phrases);
+  const gridOut = phraseGrid(outgoing.phrases);
+  const gridIn = phraseGrid(incoming.phrases);
   const drop = firstDropBar(incoming.phrases);
   const earliest = Math.ceil(outgoing.currentBar + input.leadBars);
   const kickOut = barFlags(outgoing.phrases, outgoing.barCount, (p) => p.hasKick);
@@ -215,7 +276,7 @@ export function chooseMixPoints(input: MixPointInput): MixPoints {
   const fullIn = barFlags(incoming.phrases, incoming.barCount, (p) => p.hasKick && p.hasBass);
   const exits = energyExits(outgoing.phrases);
   const entries = energyEntries(incoming.phrases);
-  const nowEntries = input.timing === 'now' ? entryBars(outgoing.phrases, outgoing.barCount, originOut) : [];
+  const nowEntries = input.timing === 'now' ? entryBars(outgoing.phrases, gridOut) : [];
   const firstEntry = nowEntries.find((bar) => bar >= earliest);
 
   // Cues sit on the incoming phrase grid, so its phrases land on the outgoing ones. They reach
@@ -224,17 +285,29 @@ export function chooseMixPoints(input: MixPointInput): MixPoints {
   const latestCue = Math.floor(incoming.barCount * MAX_CUE_FRACTION);
   const lastEntry = Math.min(latestCue, entries.length ? entries[entries.length - 1] : drop);
   const cues: number[] = [];
-  for (let bar = 0; bar <= lastEntry; bar++) if (onGrid(bar, originIn)) cues.push(bar);
-  if (cues.length === 0) cues.push(0);
+  for (const bar of gridIn.lines) if (bar <= lastEntry) cues.push(bar);
+  // A track whose first drop comes before its first line (or that has none) enters on that line.
+  if (cues.length === 0) cues.push(gridIn.lines[0]);
 
   const forcedStart = input.startBar !== undefined && input.startBar >= earliest ? input.startBar : undefined;
+  const loopStyle = input.style === 'loop';
 
   // The incoming track as the overlap hears it: with an intro loop its bars run along the looped
   // timeline, so everything from the loop's end on (its drops) comes that many bars later. The
-  // cue is never past the loop, so the loop is heard from its first bar.
+  // cue is never past the loop, so the loop is heard from its first bar, and sits where the
+  // phrase grid lands after the loop: its phrase lines meet the outgoing ones from there on
+  // (a 4-bar intro before the grid, looped once, puts the drop a phrase after a cue on bar 0).
+  const introCues = (intro: IncomingLoop, extra: number) => {
+    const line = gridIn.nextLine(intro.startBar + intro.bars);
+    if (line === undefined) return [];
+    const out: number[] = [];
+    for (let bar = 0; bar <= Math.min(intro.startBar, latestCue); bar++) if ((line + extra - bar) % PHRASE_BARS === 0) out.push(bar);
+    return out;
+  };
   const incomingView = (intro: IncomingLoop | undefined) => {
-    if (!intro) return { kick: kickIn, full: fullIn, lowDb: incoming.lowDb, entries, drop, cues };
+    if (!intro) return { kick: kickIn, full: fullIn, lowDb: incoming.lowDb, entries, drop, cues, isLine: gridIn.isLine };
     const extra = intro.repeats * intro.bars;
+    const loopEnd = intro.startBar + intro.bars;
     const timeline = <T>(values: T[]) =>
       Array.from({ length: values.length + extra }, (_, bar) => values[loopedTrackBar(intro, bar)]);
     const later = (bar: number) => (bar < intro.startBar + intro.bars ? bar : bar + extra);
@@ -244,19 +317,28 @@ export function chooseMixPoints(input: MixPointInput): MixPoints {
       lowDb: incoming.lowDb && timeline(incoming.lowDb),
       entries: entries.map(later),
       drop: later(drop),
-      cues: cues.filter((cue) => cue <= intro.startBar),
+      cues: introCues(intro, extra),
+      // Lines before the loop, none inside its repeats, the track's own moved on after it.
+      isLine: (bar: number) => (bar < loopEnd ? gridIn.isLine(bar) : bar >= loopEnd + extra && gridIn.isLine(bar - extra)),
     };
   };
 
   type Scored = MixPoints & { score: number };
   const search = (loop: OutgoingLoop | undefined, intro?: IncomingLoop): Scored | null => {
     const trackBar = (bar: number) => loopedTrackBar(loop, bar);
-    const { kick: kickIn, full: fullIn, lowDb: incomingLow, entries, drop, cues } = incomingView(intro);
+    const { kick: kickIn, full: fullIn, lowDb: incomingLow, entries, drop, cues, isLine: isLineIn } = incomingView(intro);
     const introEnd = intro ? intro.startBar + intro.bars * (intro.repeats + 1) : 0;
     const kickAt = (bar: number) => !kickOut || kickOut[trackBar(bar)];
     // The loop runs on until the deck is stopped; the overlap must begin by its first repeat
     // so that everything before the overlap is the track as it is (countdowns rely on it).
     const loopEnd = loop ? loop.startBar + loop.bars : Infinity;
+    // Outgoing lines along the looped timeline: the loop's phrase starts over every 8 bars.
+    const isLineOut = (bar: number) => (bar < loopEnd ? gridOut.isLine(bar) : (bar - loopEnd) % PHRASE_BARS === 0);
+    // Overlap bars from the first line of `isLine` that isn't a whole number of phrases after `from`.
+    const drift = (isLine: (bar: number) => boolean, from: number, overlap: number) => {
+      for (let bar = from + 1; bar < from + overlap; bar++) if (isLine(bar) && (bar - from) % PHRASE_BARS !== 0) return from + overlap - bar;
+      return 0;
+    };
     let best: Scored | null = null;
     for (const overlap of OVERLAP_CHOICES) {
       if (overlap > input.maxOverlapBars) continue;
@@ -274,7 +356,7 @@ export function chooseMixPoints(input: MixPointInput): MixPoints {
         // Auto: the track plays to its end (a looped phrase is its end). The deck's own outro
         // or last drop is what the incoming track comes in over.
         const earliestStart = loop ? earliest : Math.max(earliest, outgoing.barCount - overlap - END_SLACK_BARS);
-        for (let bar = latest; bar >= earliestStart; bar--) if (onGrid(bar, originOut)) starts.push(bar);
+        for (let bar = latest; bar >= earliestStart; bar--) if (gridOut.isLine(bar)) starts.push(bar);
       }
 
       for (const start of starts) {
@@ -284,17 +366,22 @@ export function chooseMixPoints(input: MixPointInput): MixPoints {
         if (loop && (wraps === 0 || wraps > MAX_LOOP_WRAPS)) continue;
         const timing =
           input.timing === 'now' ? LATE_WEIGHT * (start - (firstEntry ?? start)) : loop ? 0 : EARLY_WEIGHT * (latest - start);
+        const driftOut = drift(isLineOut, start, overlap);
         for (const cue of cues) {
+          const drifted = PHRASE_DRIFT_WEIGHT * Math.max(driftOut, drift(isLineIn, cue, overlap));
           for (const swap of swapCandidates(overlap, cue, entries, start, exits)) {
             // The intro loop is over by the swap: the incoming bass comes in with the track playing on.
             if (intro && introEnd > cue + swap) continue;
-            let score = LENGTH_WEIGHT * overlap - timing - SKIP_WEIGHT * Math.max(0, cue - drop);
+            let score = LENGTH_WEIGHT * overlap - timing - drifted - SKIP_WEIGHT * Math.max(0, cue - drop);
             // Before the swap the outgoing kick carries the beat; the incoming carries it after,
             // and should have a groove to enter on before.
             let beatless = 0;
             for (let bar = start; bar < start + swap; bar++) if (!kickAt(bar)) beatless++;
             score -= BEATLESS_WEIGHT * beatless ** 2;
-            score -= BEATLESS_WEIGHT * countFalse(kickIn, cue, overlap) ** 2;
+            if (loopStyle) {
+              score -= LOOP_STYLE_BEATLESS_WEIGHT * countFalse(kickIn, cue, swap);
+              score -= BEATLESS_WEIGHT * countFalse(kickIn, cue + swap, overlap - swap) ** 2;
+            } else score -= BEATLESS_WEIGHT * countFalse(kickIn, cue, overlap) ** 2;
             score -= HEADLESS_WEIGHT * countTrue(fullIn, cue, swap) ** 2;
             const swapBar = cue + swap;
             if (entries.includes(swapBar)) score += DROP_ON_SWAP;
@@ -309,7 +396,7 @@ export function chooseMixPoints(input: MixPointInput): MixPoints {
               score -= LOOP_WRAP_WEIGHT * wraps;
               if (bassOut && countTrue(bassOut, loop.startBar, loop.bars) === loop.bars) score += LOOP_BASS_BONUS;
             }
-            if (intro) score += INTRO_LOOP_BONUS - INTRO_REPEAT_WEIGHT * intro.repeats;
+            if (intro) score += INTRO_LOOP_BONUS - (INTRO_REPEAT_WEIGHT * intro.repeats * intro.bars) / PHRASE_BARS;
             if (!best || score > best.score) {
               best = { overlapBars: overlap, outgoingStartBar: start, incomingStartBar: cue, bassSwapBar: swap, score };
               if (loop) best.outgoingLoop = loop;
@@ -322,11 +409,10 @@ export function chooseMixPoints(input: MixPointInput): MixPoints {
     return best;
   };
 
-  const loopStyle = input.style === 'loop';
   const intros: (IncomingLoop | undefined)[] = [undefined];
   if (loopStyle) {
-    for (const phrase of introLoopCandidates(originIn, entries[0] ?? incoming.barCount, kickIn, fullIn)) {
-      for (let repeats = 1; repeats <= MAX_INTRO_REPEATS; repeats++) intros.push({ ...phrase, repeats });
+    for (const window of introLoopCandidates(incoming.phrases, gridIn, entries[0] ?? incoming.barCount, fullIn)) {
+      for (let repeats = 1; repeats * window.bars <= MAX_INTRO_EXTRA_BARS; repeats++) intros.push({ ...window, repeats });
     }
   }
   const searchAll = (loop: OutgoingLoop | undefined, current: Scored | null): Scored | null => {
@@ -343,7 +429,7 @@ export function chooseMixPoints(input: MixPointInput): MixPoints {
     // deck (its end is where the first jump back happens) and inside the track. For Auto it is
     // the track's last phrase: a loop stands in for the end, not for the rest of the track.
     const minLoopEnd = input.timing === 'now' ? 0 : outgoing.barCount - END_SLACK_BARS;
-    for (const loop of loopCandidates(outgoing.barCount, originOut, Math.max(earliest, minLoopEnd), kickOut)) {
+    for (const loop of loopCandidates(outgoing.barCount, gridOut, Math.max(earliest, minLoopEnd), kickOut)) {
       best = searchAll(loop, best);
     }
   }
@@ -352,8 +438,11 @@ export function chooseMixPoints(input: MixPointInput): MixPoints {
     // A short pickup before the incoming track's first phrase line (a bar or two of intro)
     // comes along: both tracks start that much earlier, so the phrase lines still coincide.
     const pickup =
-      best.incomingStartBar === originIn && originIn > 0 && originIn <= MAX_PICKUP_BARS && best.outgoingStartBar - originIn >= earliest
-        ? originIn
+      best.incomingStartBar === gridIn.pickup &&
+      gridIn.pickup > 0 &&
+      gridIn.pickup <= MAX_PICKUP_BARS &&
+      best.outgoingStartBar - gridIn.pickup >= earliest
+        ? gridIn.pickup
         : 0;
     return {
       overlapBars: best.overlapBars + pickup,
@@ -372,37 +461,52 @@ export function chooseMixPoints(input: MixPointInput): MixPoints {
     if (entry !== undefined) return { overlapBars: 0, outgoingStartBar: entry, incomingStartBar: Math.min(drop, latestCue), bassSwapBar: 0 };
   }
   let cut = outgoing.barCount - PHRASE_BARS;
-  while (cut >= earliest && !onGrid(cut, originOut)) cut--;
+  while (cut >= earliest && !gridOut.isLine(cut)) cut--;
   if (cut < earliest) {
     cut = Math.max(earliest, 0);
-    while (cut < outgoing.barCount && !onGrid(cut, originOut)) cut++;
+    while (cut < outgoing.barCount && !gridOut.isLine(cut)) cut++;
     if (cut >= outgoing.barCount) cut = Math.min(Math.max(earliest, 0), Math.max(0, outgoing.barCount - 1));
   }
   return { overlapBars: 0, outgoingStartBar: cut, incomingStartBar: Math.min(drop, latestCue), bassSwapBar: 0 };
 }
 
 /** Phrases of the outgoing track that can be looped, latest first. None without kick information. */
-function loopCandidates(barCount: number, origin: number, earliest: number, kick: boolean[] | null): OutgoingLoop[] {
+function loopCandidates(barCount: number, grid: PhraseGrid, earliest: number, kick: boolean[] | null): OutgoingLoop[] {
   if (!kick) return [];
   const loops: OutgoingLoop[] = [];
   for (let start = barCount - PHRASE_BARS; start >= 0; start--) {
-    if (!onGrid(start, origin) || start + PHRASE_BARS < earliest) continue;
+    if (!wholePhrase(grid, start, barCount) || start + PHRASE_BARS < earliest) continue;
     if (countTrue(kick, start, PHRASE_BARS) === PHRASE_BARS) loops.push({ startBar: start, bars: PHRASE_BARS });
   }
   return loops;
 }
 
 /**
- * Phrases of the incoming intro that can be held on a loop while it fades in: on its grid, before
- * `until` (its first drop), with a kick to lock on and no bassline. None without kick information.
+ * Stretches of the incoming intro that can be held on a loop while it fades in: a phrase on its
+ * grid (or half of one, on the half-phrase grid), before `until` (its first drop), without the
+ * full energy of kick and bassline together, and not a fade-in or near-silence. A kick to lock
+ * on isn't needed: the outgoing track carries the beat until the swap.
  */
-function introLoopCandidates(origin: number, until: number, kick: boolean[] | null, full: boolean[] | null): OutgoingLoop[] {
-  if (!kick) return [];
+function introLoopCandidates(phrases: Phrase[], grid: PhraseGrid, until: number, full: boolean[] | null): OutgoingLoop[] {
+  const loudest = Math.max(...phrases.map((p) => p.energyDb));
+  const quiet = (bar: number) => {
+    const phrase = phrases.find((p) => bar >= p.startBar && bar < p.startBar + p.bars);
+    return !phrase || phrase.energyDb < loudest + INTRO_LOOP_MIN_LEVEL_DB;
+  };
   const loops: OutgoingLoop[] = [];
-  for (let start = 0; start + PHRASE_BARS <= until; start++) {
-    if (!onGrid(start, origin)) continue;
-    if (countTrue(kick, start, PHRASE_BARS) === PHRASE_BARS && countTrue(full, start, PHRASE_BARS) === 0) {
-      loops.push({ startBar: start, bars: PHRASE_BARS });
+  for (const bars of INTRO_LOOP_BARS) {
+    // Half a phrase only where no whole one fits.
+    if (loops.length > 0) break;
+    for (let start = 0; start + bars <= until; start++) {
+      const fits =
+        bars === PHRASE_BARS
+          ? wholePhrase(grid, start, until)
+          : grid.isHalfLine(start) && grid.isHalfLine(start + bars) && !grid.lines.some((line) => line > start && line < start + bars);
+      if (!fits) continue;
+      if (countTrue(full, start, bars) > 0) continue;
+      let audible = true;
+      for (let bar = start; bar < start + bars && audible; bar++) if (quiet(bar)) audible = false;
+      if (audible) loops.push({ startBar: start, bars });
     }
   }
   return loops;
@@ -503,8 +607,20 @@ function energyExits(phrases: Phrase[]): number[] {
 }
 
 /** Section starts and the 16-bar lattice of the phrase grid, ascending. */
-function entryBars(phrases: Phrase[], barCount: number, origin: number): number[] {
+function entryBars(phrases: Phrase[], grid: PhraseGrid): number[] {
   const bars = new Set(phrases.map((p) => p.startBar).filter((bar) => bar > 0));
-  for (let bar = origin; bar < barCount; bar += ENTRY_BARS) if (bar > 0) bars.add(bar);
+  // Every other line, counted from the first line and again after an irregular phrase.
+  let runStart = 0;
+  grid.lines.forEach((bar, i) => {
+    if (i > 0 && bar - grid.lines[i - 1] !== PHRASE_BARS) runStart = i;
+    if ((i - runStart) % (ENTRY_BARS / PHRASE_BARS) === 0 && bar > 0) bars.add(bar);
+  });
   return [...bars].sort((a, b) => a - b);
+}
+
+/** Whether bars [start, start + 8) are one phrase: a line on each end (or the track's end). */
+function wholePhrase(grid: PhraseGrid, start: number, end: number): boolean {
+  if (!grid.isLine(start) || start + PHRASE_BARS > end) return false;
+  const next = grid.nextLine(start + 1);
+  return next === undefined || next === start + PHRASE_BARS;
 }

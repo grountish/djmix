@@ -17,6 +17,19 @@ const KICK_BEAT_RATIO = 3;
 const KICK_LEVEL_RATIO = 0.1;
 /** A bar is "loud" within this of the track's loud bars. */
 const LOUD_DB = 6;
+/**
+ * A bar this far below the track's loud bars is near-silence or the bottom of a fade: a change
+ * whose context reaches into such bars is the fade, not a section boundary.
+ */
+const AUDIBLE_DB = 20;
+/**
+ * Cost of a phrase that isn't 8 bars long, against the gain of the boundaries it lets the grid
+ * reach (each boundary's change squared, relative to the track's strongest few). A 4-bar
+ * break inserted in a run of 8-bar phrases is the common case; other lengths cost more.
+ */
+const IRREGULAR_PHRASE_COST = 1.5;
+/** The longest irregular phrase considered; past it the grid has simply moved on. */
+const MAX_IRREGULAR_BARS = 15;
 
 interface BarFeatures {
   energies: BarEnergies;
@@ -51,9 +64,9 @@ export function analyzeStructure(
   const features = measureBars(spectral, clock, downbeat, barCount);
   if (barCount < 2) return { bars: features.energies, phrases: [] };
 
-  const origin = choosePhraseOrigin(computeNovelty(features, barCount), barCount);
-  const starts = [0];
-  for (let bar = origin; bar < barCount; bar += PHRASE_BARS) if (bar > 0) starts.push(bar);
+  const loudRef = percentile(features.totalDb, 90);
+  const audible = features.totalDb.map((db) => db >= loudRef - AUDIBLE_DB);
+  const starts = choosePhraseLines(computeNovelty(features, barCount), barCount, audible);
 
   const flags = classifyBars(features);
   const blocks = starts.map((start, i) => {
@@ -169,44 +182,94 @@ export function computeNovelty(features: BarFeatures, barCount: number): number[
 }
 
 /**
- * Offset of the 8-bar phrase grid that lines up best with the changes. Only bars where the
- * change peaks vote (a boundary smears over its neighbours, which must not count twice), and
- * they vote squared, so a few real boundaries outweigh many small in-phrase ones (a chord
- * change every bar, say). Bars whose look-ahead window runs past the end of the track are
- * left out: the ending (fade, silence) reads as the biggest change of all and would align the
- * grid to where the file stops. It still gets one vote, since tracks usually end on a phrase
- * line, capped at the strongest boundary inside the track.
+ * Phrase lines (bar 0 first): an 8-bar grid that follows the changes, and moves where the
+ * music does. Only bars where the change peaks count (a boundary smears over its neighbours,
+ * which must not count twice), squared, so a few real boundaries outweigh many small in-phrase
+ * ones (a chord change every bar, say). A phrase of another length (a 4-bar break, a 2-bar
+ * fill) is allowed where the boundaries after it make up for its cost; the stretch before the
+ * first line (a pickup) is free, and so is the one after the last.
+ *
+ * Left out: bars whose look-ahead runs past the end (the ending itself too: a fade or an edit
+ * stops wherever it stops, and on tracks with weak inside boundaries a vote for it decided the
+ * grid against both the intro's and the outro's sections), and changes whose context reaches
+ * into near-silence (a fade-in reads as the biggest change of the track).
  */
-export function choosePhraseOrigin(novelty: number[], barCount: number): number {
-  // The last bar still fully covered by the longest look-ahead window.
+export function choosePhraseLines(novelty: number[], barCount: number, audible?: boolean[]): number[] {
   const usable = Math.min(novelty.length, barCount - Math.max(...NOVELTY_SCALES) + 1);
+  const context = Math.min(...NOVELTY_SCALES);
+  const heard = (bar: number) => {
+    if (!audible) return true;
+    for (let b = Math.max(0, bar - context); b < Math.min(barCount, bar + context); b++) if (!audible[b]) return false;
+    return true;
+  };
   const isPeak = (bar: number) =>
-    novelty[bar] > 0 && novelty[bar] >= (novelty[bar - 1] ?? -1) && novelty[bar] >= (novelty[bar + 1] ?? -1);
+    novelty[bar] > 0 && novelty[bar] >= (novelty[bar - 1] ?? -1) && novelty[bar] >= (novelty[bar + 1] ?? -1) && heard(bar);
   const peaks: number[] = [];
   for (let bar = 1; bar < usable; bar++) if (isPeak(bar)) peaks.push(bar);
-  const cap = Math.max(1, ...peaks.map((bar) => novelty[bar]));
+  const regular = () => {
+    const lines = [0];
+    for (let bar = PHRASE_BARS; bar < barCount; bar += PHRASE_BARS) lines.push(bar);
+    return lines;
+  };
+  if (peaks.length === 0) return regular();
 
-  let ending = -1;
-  for (let bar = Math.max(1, usable); bar < novelty.length; bar++) {
-    if (ending < 0 || novelty[bar] > novelty[ending]) ending = bar;
+  // Gains relative to the strongest few boundaries, so the cost means the same on every track.
+  const strongest = peaks.map((bar) => novelty[bar] ** 2).sort((a, b) => b - a).slice(0, 4);
+  const scale = strongest.reduce((sum, v) => sum + v, 0) / strongest.length || 1;
+  const gain = new Array<number>(barCount).fill(0);
+  for (const bar of peaks) gain[bar] = novelty[bar] ** 2 / scale;
+  const cost = (bars: number) =>
+    bars === PHRASE_BARS
+      ? 0
+      : bars === PHRASE_BARS / 2 || bars === (3 * PHRASE_BARS) / 2
+        ? IRREGULAR_PHRASE_COST
+        : bars % 2 === 0
+          ? 1.25 * IRREGULAR_PHRASE_COST
+          : 1.5 * IRREGULAR_PHRASE_COST;
+
+  // best[b]: the highest score of a grid with a line on bar b; from[b]: the line before it.
+  const best = new Array<number>(barCount).fill(-Infinity);
+  const from = new Array<number>(barCount).fill(0);
+  for (let bar = 1; bar < barCount; bar++) {
+    let score = bar <= PHRASE_BARS ? 0 : -Infinity;
+    let previous = 0;
+    for (let bars = 1; bars <= MAX_IRREGULAR_BARS && bars < bar; bars++) {
+      const candidate = best[bar - bars] - cost(bars);
+      if (candidate > score) {
+        score = candidate;
+        previous = bar - bars;
+      }
+    }
+    best[bar] = score + gain[bar];
+    from[bar] = previous;
   }
-
-  const scores = new Array<number>(PHRASE_BARS).fill(0);
-  for (const bar of peaks) scores[bar % PHRASE_BARS] += novelty[bar] ** 2;
-  if (ending >= 0) scores[ending % PHRASE_BARS] += Math.min(novelty[ending], cap) ** 2;
-  return scores.indexOf(Math.max(...scores));
+  let last = 0;
+  for (let bar = Math.max(1, barCount - MAX_IRREGULAR_BARS); bar < barCount; bar++) {
+    if (last === 0 || best[bar] > best[last]) last = bar;
+  }
+  const lines: number[] = [];
+  for (let bar = last; bar > 0; bar = from[bar]) lines.push(bar);
+  lines.reverse();
+  // Past the last boundary that counted, the grid runs on regularly to the end.
+  for (let bar = (lines[lines.length - 1] ?? 0) + PHRASE_BARS; bar < barCount; bar += PHRASE_BARS) lines.push(bar);
+  return [0, ...lines];
 }
 
 function labelBlocks(
   features: BarFeatures,
   blocks: { start: number; end: number; state: BlockState }[],
 ): Phrase[] {
-  // Runs of blocks with the same state form one section.
+  // Runs of 8-bar blocks with the same state form one section. A block of another length (the
+  // pickup before the first line, a break that moves the grid, the end) stands alone, so every
+  // phrase line can be read back off the sections (see `phraseLines` in mixPoints).
+  const regular = (b: { start: number; end: number }) => (b.end - b.start) % PHRASE_BARS === 0;
   const sections: { start: number; end: number; state: BlockState }[] = [];
   for (const block of blocks) {
     const previous = sections[sections.length - 1];
     const same =
       previous &&
+      regular(previous) &&
+      regular(block) &&
       previous.state.kick === block.state.kick &&
       previous.state.bass === block.state.bass &&
       previous.state.loud === block.state.loud;

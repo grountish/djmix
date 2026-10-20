@@ -293,7 +293,7 @@ export function App() {
         </label>
         <label
           className="topbar-sync"
-          title="How the next track comes in. Blend: the tracks overlap as they are. Loop: the incoming track holds a sparse phrase of its intro (kick, no bassline) on a loop while it fades in, then plays on into its drop on the bass swap; the outgoing track loops its last phrase when that helps">
+          title="How the next track comes in. Blend: the tracks overlap as they are. Loop: the incoming track holds a sparse phrase of its intro (anything short of kick and bassline together) on a loop while it fades in, then plays on into its drop on the bass swap; the outgoing track loops its last phrase when that helps">
           <span>MIX</span>
           <select value={state.automix.style} onChange={(e) => actions.setMixStyle(e.target.value as MixStyle)}>
             {MIX_STYLES.map(({ style, label }) => (

@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { Phrase, PhraseLabel } from '../analysis/types';
-import { chooseMixPoints, loopedTrackBar, loopWrapsBy } from './mixPoints';
+import { chooseMixPoints, loopedTrackBar, loopWrapsBy, phraseGrid } from './mixPoints';
 
-type Section = [PhraseLabel, number] | [PhraseLabel, number, { kick?: boolean; bass?: boolean }];
+type Section = [PhraseLabel, number] | [PhraseLabel, number, { kick?: boolean; bass?: boolean; energyDb?: number }];
 
 function phrases(...sections: Section[]): Phrase[] {
   let startBar = 0;
@@ -13,7 +13,7 @@ function phrases(...sections: Section[]): Phrase[] {
       label,
       hasKick: flags?.kick ?? true,
       hasBass: flags?.bass ?? label === 'drop',
-      energyDb: -10,
+      energyDb: flags?.energyDb ?? -10,
     };
     startBar += bars;
     return phrase;
@@ -272,6 +272,26 @@ describe('chooseMixPoints', () => {
     });
   });
 
+  describe('the phrase grid', () => {
+    it('reads the lines off the sections: every 8 bars, after a pickup, and where a break moved them', () => {
+      const grid = phraseGrid(phrases(['intro', 2], ['intro', 16], ['drop', 32], ['breakdown', 4], ['drop', 16], ['outro', 5]));
+      expect(grid.pickup).toBe(2);
+      expect(grid.lines).toEqual([2, 10, 18, 26, 34, 42, 50, 54, 62, 70]);
+      expect(grid.isHalfLine(6)).toBe(true);
+      expect(grid.isHalfLine(52)).toBe(false);
+      // An older analysis merged the pickup into the first section.
+      expect(phraseGrid(phrases(['intro', 18], ['drop', 32])).lines).toEqual([2, 10, 18, 26, 34, 42]);
+    });
+
+    it('mixes out on the lines of a grid that moved before the end', () => {
+      // A 4-bar break at 160: the last phrases start on 164, 172, 180.
+      const moved = phrases(['intro', 16], ['drop', 64], ['breakdown', 16], ['drop', 64], ['breakdown', 4], ['drop', 16], ['outro', 8]);
+      const points = chooseMixPoints({ ...input, outgoing: { phrases: moved, barCount: 188, currentBar: 20 } });
+      expect(points.outgoingStartBar % 8).toBe(4);
+      expect(points.outgoingStartBar + points.overlapBars).toBeGreaterThanOrEqual(180);
+    });
+  });
+
   describe('the loop style', () => {
     const SHORT_INTRO = phrases(['intro', 8], ['drop', 64], ['outro', 16]);
     const loopInput = { ...input, style: 'loop' as const, incoming: { phrases: SHORT_INTRO, barCount: 88 } };
@@ -294,16 +314,38 @@ describe('chooseMixPoints', () => {
       });
     });
 
-    it('loops a phrase with a kick and no bassline, over by the swap', () => {
+    it('loops a phrase short of the full energy, before the drop and over by the swap', () => {
       const incoming = phrases(['intro', 8, { kick: false }], ['intro', 8], ['build', 8], ['drop', 64], ['outro', 16]);
       for (const timing of ['end', 'now'] as const) {
         const points = chooseMixPoints({ ...loopInput, timing, incoming: { phrases: incoming, barCount: 104 } });
         const loop = points.incomingLoop!;
-        expect(loop.startBar).toBeGreaterThanOrEqual(8);
         expect(loop.startBar + loop.bars).toBeLessThanOrEqual(24);
         expect(points.incomingStartBar).toBeLessThanOrEqual(loop.startBar);
         expect(loop.startBar + loop.bars * (loop.repeats + 1)).toBeLessThanOrEqual(points.incomingStartBar + points.bassSwapBar);
       }
+    });
+
+    it('holds a pad intro without a kick: the outgoing track carries the beat until the swap', () => {
+      const pads = phrases(['intro', 8, { kick: false, bass: false }], ['drop', 64], ['outro', 16]);
+      const points = chooseMixPoints({ ...loopInput, incoming: { phrases: pads, barCount: 88 } });
+      expect(points.incomingLoop).toEqual({ startBar: 0, bars: 8, repeats: 1 });
+      expect(points.incomingStartBar + points.bassSwapBar).toBe(16);
+    });
+
+    it('loops a 4-bar intro before the phrase grid so its drop lands a whole number of phrases in', () => {
+      const short = phrases(['intro', 4], ['drop', 64], ['outro', 16]);
+      const points = chooseMixPoints({ ...loopInput, incoming: { phrases: short, barCount: 84 } });
+      const loop = points.incomingLoop!;
+      expect(loop).toMatchObject({ startBar: 0, bars: 4 });
+      // The drop (track bar 4) comes after the repeats, on a phrase line of the overlap: the swap.
+      const dropInOverlap = 4 + loop.repeats * loop.bars - points.incomingStartBar;
+      expect(dropInOverlap % 8).toBe(0);
+      expect(points.bassSwapBar).toBe(dropInOverlap);
+    });
+
+    it("doesn't hold a fade-in or near-silence", () => {
+      const fadeIn = phrases(['intro', 8, { kick: false, bass: false, energyDb: -40 }], ['drop', 64], ['outro', 16]);
+      expect(chooseMixPoints({ ...loopInput, incoming: { phrases: fadeIn, barCount: 88 } }).incomingLoop).toBeUndefined();
     });
 
     it('never loops the incoming track for a blend, nor one without a sparse intro', () => {
