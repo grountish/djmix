@@ -10,6 +10,12 @@ https://miltonmannarino.github.io/djmix-features/ — what changed, how to test,
 Shared dev server: Vite on :5173 (+ Electron). The live tests (`npm run test:live`) start their
 own Vite on :5174 with HMR off, so edits don't reload the page under a running test.
 
+## Session 6e8d1284 — incoming enters early (loop the first beat phrase) — IN PROGRESS (2026-10-20)
+
+User: incoming often already high energy; cue lands past a third of the track (on a mid-track
+breakdown) when the first beat phrase right after a beatless intro could be looped instead.
+Touching `src/audio/mix/mixPoints.ts`, `mixPoints.test.ts`, maybe `planner.ts`.
+
 ## Session 6e8d1284 — phrase grid accuracy + more loop mixes — DONE `2abf7f6` (2026-10-20)
 
 `choosePhraseLines` (structure.ts) replaces the global origin: no ending vote, fade-in changes
