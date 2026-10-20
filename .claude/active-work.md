@@ -10,11 +10,12 @@ https://miltonmannarino.github.io/djmix-features/ — what changed, how to test,
 Shared dev server: Vite on :5173 (+ Electron). The live tests (`npm run test:live`) start their
 own Vite on :5174 with HMR off, so edits don't reload the page under a running test.
 
-## Session 6e8d1284 — incoming enters early (loop the first beat phrase) — IN PROGRESS (2026-10-20)
+## Session 6e8d1284 — Loop enters early (first beat phrase held) — DONE `ad727ce` (2026-10-20)
 
-User: incoming often already high energy; cue lands past a third of the track (on a mid-track
-breakdown) when the first beat phrase right after a beatless intro could be looped instead.
-Touching `src/audio/mix/mixPoints.ts`, `mixPoints.test.ts`, maybe `planner.ts`.
+Loop style: cues never past the incoming first drop (`lastEntry`), the first all-kick phrase up to
+the drop's first phrase is an intro-loop candidate even with bass (`LOOP_STYLE_HEADLESS_WEIGHT`
+for its held bars), `LOOP_STYLE_SKIP_WEIGHT` per bar of beat skipped. Blend untouched (plan dump
+identical). Every file is free.
 
 ## Session 6e8d1284 — phrase grid accuracy + more loop mixes — DONE `2abf7f6` (2026-10-20)
 
