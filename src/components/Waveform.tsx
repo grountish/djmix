@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import type { BeatClock } from '@/audio/analysis/beatClock';
 import type { LoopState, Phrase, PhraseLabel, SpectralWaveform } from '@/types';
+import { waveColumn } from './waveColumns';
 
 /** The next mix, in this track's bars, for drawing on its waveform. */
 export interface MixMarks {
@@ -212,7 +213,6 @@ export function Waveform({
   // The visible window keeps the playhead centred.
   const windowDuration = Math.min(zoomSeconds, duration || zoomSeconds);
   const windowStart = Math.max(0, Math.min(Math.max(0, duration - windowDuration), currentTime - windowDuration / 2));
-  const windowEnd = windowStart + windowDuration;
 
   const overviewPlayhead = duration > 0 ? currentTime / duration : 0;
   const viewportStart = duration > 0 ? windowStart / duration : 0;
@@ -242,13 +242,22 @@ export function Waveform({
       ctx.fillStyle = WAVE_BG;
       ctx.fillRect(0, 0, w, h);
 
+      // The view moves in whole pixels, and the waveform's columns sit on a fixed grid of track
+      // time (see waveColumn): scrolling slides the same columns along, with the beat grid and
+      // marks drawn from the same origin, instead of resampling the waveform every frame.
+      const pxPerSecond = w / windowDuration;
+      const offset = Math.round(windowStart * pxPerSecond);
+      const viewStart = offset / pxPerSecond;
+      const viewEnd = viewStart + windowDuration;
+      const xOf = (time: number) => (time - viewStart) * pxPerSecond;
+
       // Beat grid behind the waveform.
       if (clock && bpm && bpm > 0) {
-        let beat = Math.ceil(clock.beatAt(windowStart));
+        let beat = Math.ceil(clock.beatAt(viewStart));
         let time = clock.timeOf(beat);
         let guard = 0;
-        while (time <= windowEnd && guard++ < 4096) {
-          const x = Math.floor(((time - windowStart) / windowDuration) * w) + 0.5;
+        while (time <= viewEnd && guard++ < 4096) {
+          const x = Math.floor(xOf(time)) + 0.5;
           const downbeat = ((beat % 4) + 4) % 4 === 0;
           ctx.strokeStyle = downbeat ? 'rgba(255,255,255,0.28)' : 'rgba(255,255,255,0.09)';
           ctx.lineWidth = 1;
@@ -262,22 +271,15 @@ export function Waveform({
       }
 
       // Waveform: one line per pixel.
-      const startIdx = Math.floor((windowStart / duration) * data.length);
-      const endIdx = Math.ceil((windowEnd / duration) * data.length);
-      const visible = endIdx - startIdx;
       const useSpectral = !!spectralData && spectralData.low.length > 0;
-      if (visible > 0) {
+      if (duration > 0) {
         const columns = Math.floor(w);
         for (let px = 0; px < columns; px++) {
-          const pos = startIdx + (px / columns) * visible;
-          const idx = Math.floor(pos);
-          const next = Math.min(idx + 1, data.length - 1);
-          const frac = pos - idx;
-          const amplitude = (data[idx] || 0) * (1 - frac) + (data[next] || 0) * frac;
+          const { amplitude, bin } = waveColumn(data, duration, pxPerSecond, offset + px);
           const half = amplitude * centerY * 0.9;
           if (half < 0.5) continue;
           ctx.fillStyle = useSpectral
-            ? spectralColor(spectralData!.low[idx] || 0, spectralData!.mid?.[idx] || 0, spectralData!.high[idx] || 0)
+            ? spectralColor(spectralData!.low[bin] || 0, spectralData!.mid?.[bin] || 0, spectralData!.high[bin] || 0)
             : '#8ab4ff';
           ctx.fillRect(px, centerY - half, 1, half * 2);
         }
@@ -289,8 +291,8 @@ export function Waveform({
         ctx.textBaseline = 'top';
         for (const phrase of phrases ?? []) {
           const time = clock.timeOf(phrase.startBar * 4);
-          if (time < windowStart || time > windowEnd) continue;
-          const x = Math.floor(((time - windowStart) / windowDuration) * w) + 0.5;
+          if (time < viewStart || time > viewEnd) continue;
+          const x = Math.floor(xOf(time)) + 0.5;
           ctx.strokeStyle = PHRASE_COLORS[phrase.label];
           ctx.lineWidth = 2;
           ctx.beginPath();
@@ -306,14 +308,14 @@ export function Waveform({
       if (marks && clock) {
         ctx.font = '700 9px -apple-system, "Segoe UI", sans-serif';
         ctx.textBaseline = 'top';
-        drawMarks(ctx, marks, clock, (time) => ((time - windowStart) / windowDuration) * w, w, h, true);
+        drawMarks(ctx, marks, clock, xOf, w, h, true);
       }
 
-      if (loop) drawLoop(ctx, loop, (time) => ((time - windowStart) / windowDuration) * w, w, h);
+      if (loop) drawLoop(ctx, loop, xOf, w, h);
 
       // Cue point.
-      if (cuePoint !== null && cuePoint !== undefined && cuePoint >= windowStart && cuePoint <= windowEnd) {
-        const x = Math.floor(((cuePoint - windowStart) / windowDuration) * w) + 0.5;
+      if (cuePoint !== null && cuePoint !== undefined && cuePoint >= viewStart && cuePoint <= viewEnd) {
+        const x = Math.floor(xOf(cuePoint)) + 0.5;
         ctx.strokeStyle = CUE;
         ctx.lineWidth = 1;
         ctx.beginPath();
@@ -329,7 +331,7 @@ export function Waveform({
         ctx.fill();
       }
 
-      // Playhead, fixed at the centre.
+      // Playhead, fixed at the centre (off the unrounded view, so it never wobbles a pixel).
       const playheadX = Math.floor(((currentTime - windowStart) / windowDuration) * w) + 0.5;
       ctx.strokeStyle = PLAYHEAD;
       ctx.lineWidth = 1.5;
@@ -348,7 +350,7 @@ export function Waveform({
 
     rafRef.current = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(rafRef.current);
-  }, [data, spectralData, currentTime, duration, windowStart, windowEnd, windowDuration, bpm, clock, phrases, cuePoint, marks, loop, width]);
+  }, [data, spectralData, currentTime, duration, windowStart, windowDuration, bpm, clock, phrases, cuePoint, marks, loop, width]);
 
   // Overview: the whole track pre-rendered once, then composited with the viewport and playhead.
   const cachedOverviewRef = useRef<HTMLCanvasElement | null>(null);
