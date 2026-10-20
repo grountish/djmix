@@ -10,13 +10,15 @@ https://miltonmannarino.github.io/djmix-features/ — what changed, how to test,
 Shared dev server: Vite on :5173 (+ Electron). The live tests (`npm run test:live`) start their
 own Vite on :5174 with HMR off, so edits don't reload the page under a running test.
 
-## Session 6e8d1284 — phrase grid accuracy + more loop mixes — IN PROGRESS (2026-10-20)
+## Session 6e8d1284 — phrase grid accuracy + more loop mixes — DONE `2abf7f6` (2026-10-20)
 
-User: only 1 of 6 mixes used a loop; the mix often misses the 32-beat (8-bar) phrase. Audit the
-phrase grid / downbeat on the real library, fix the analysis, then widen what the loop style
-can hold. Files: `src/audio/analysis/structure.ts`, `downbeat.ts`, `beatGrid.ts` (if the
-downbeat is the cause), `types.ts` (ANALYZER_VERSION), `src/audio/mix/mixPoints.ts` (+tests),
-`fixtures/analysis-baseline.json`, `scripts/analyze*.ts`.
+`choosePhraseLines` (structure.ts) replaces the global origin: no ending vote, fade-in changes
+ignored, DP may move the grid at a break (`IRREGULAR_PHRASE_COST`); irregular blocks stay their
+own sections. Planner reads lines via `phraseGrid` (mixPoints.ts), `PHRASE_DRIFT_WEIGHT`, cue
+fallback = first line. Loop style: any sparse intro, half-phrase loops for short intros.
+Analyzer v9, baseline updated. Open: beat phase (half-beat) on Silk, My Boo, Enoough, Big Fun,
+Fields, Twenty Four Seven, Song 4 Mutya disagrees with Traktor's grid; waiting for the user's
+ears. Every file is free.
 
 ## Session 6e8d1284 — "Loop" mix style — DONE `512961c` (2026-10-19)
 
