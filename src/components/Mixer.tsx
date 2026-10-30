@@ -65,6 +65,18 @@ const FX_TITLES: Record<FxType, string> = {
   reverb: 'Reverb',
 };
 
+/** Pad captions: short enough for a quarter of the channel's width. */
+const FX_PAD_LABELS: Record<FxType, string> = { echo: 'ECHO', flanger: 'FLANG', phaser: 'PHASE', reverb: 'VERB' };
+
+/** Where a double-click puts the dry/wet knob: both at −3 dB, the same as a fresh channel. */
+const FX_AMOUNT_RESET = 0.5;
+
+function amountReadout(amount: number): string {
+  if (amount < 0.005) return 'DRY';
+  if (amount > 0.995) return 'WET';
+  return `${Math.round(amount * 100)}%`;
+}
+
 function meterFor(target: MeterTarget): AnalyserNode | null {
   try {
     return getMeter(target);
@@ -156,57 +168,76 @@ export function Mixer({
     );
   };
 
-  const fxSelect = (deck: DeckId) => {
+  // One pad per effect: a click engages it (or swaps the running one), a click on the lit pad
+  // turns it off. The tail of an echo or reverb rings out either way.
+  const fxPads = (deck: DeckId) => {
     const { fx } = channels[deck];
     return (
-      <select
-        className={`mixer-select ${fx.type ? 'on' : ''}`}
-        value={fx.type ?? 'off'}
-        title={fx.type ? FX_TITLES[fx.type] : 'Channel effect (post-fader)'}
-        onChange={(e) => onFxChange(deck, { ...fx, type: e.target.value === 'off' ? null : (e.target.value as FxType) })}>
-        <option value="off">OFF</option>
-        {FX_TYPES.map(({ type, label }) => (
-          <option key={type} value={type}>
-            {label.toUpperCase()}
-          </option>
-        ))}
-      </select>
+      <div className={`fx-pads fx-${deck.toLowerCase()}`} role="group" aria-label={`Deck ${deck} effect`}>
+        {FX_TYPES.map(({ type }) => {
+          const on = fx.type === type;
+          return (
+            <button
+              key={type}
+              className={`fx-pad ${on ? 'on' : ''}`}
+              aria-pressed={on}
+              title={`${FX_TITLES[type]} (${on ? 'click to turn off' : 'click to turn on'})`}
+              onClick={() => onFxChange(deck, { ...fx, type: on ? null : type })}>
+              {FX_PAD_LABELS[type]}
+            </button>
+          );
+        })}
+      </div>
     );
   };
 
-  const beatsSelect = (deck: DeckId) => {
+  // Beat length, set before or while the effect runs; reverb has none.
+  const beatStepper = (deck: DeckId) => {
     const { fx } = channels[deck];
-    const synced = !!fx.type && FX_TYPES.find((t) => t.type === fx.type)?.beatSynced;
+    const synced = FX_TYPES.find((t) => t.type === fx.type)?.beatSynced ?? true;
+    const index = FX_BEATS.indexOf(fx.beats);
+    const step = (by: number) => {
+      const next = FX_BEATS[index + by];
+      if (next !== undefined) onFxChange(deck, { ...fx, beats: next });
+    };
+    const what = fx.type === 'echo' ? 'Echo time' : fx.type ? 'Sweep length' : 'Effect length';
     return (
-      <select
-        className="mixer-select"
-        value={fx.beats}
-        disabled={!synced}
-        title={fx.type === 'echo' ? 'Echo time in beats' : 'Beats per sweep'}
-        onChange={(e) => onFxChange(deck, { ...fx, beats: Number(e.target.value) })}>
-        {FX_BEATS.map((beats) => (
-          <option key={beats} value={beats}>
-            {formatBeats(beats)}
-          </option>
-        ))}
-      </select>
+      <div className={`fx-beats ${fx.type ? 'live' : ''} ${synced ? '' : 'none'} fx-${deck.toLowerCase()}`}>
+        <button className="fx-step" aria-label={`Deck ${deck}: shorter`} disabled={!synced || index <= 0} onClick={() => step(-1)}>
+          ‹
+        </button>
+        <span className="fx-beats-value" title={synced ? `${what}: ${formatBeats(fx.beats)} beat${fx.beats > 1 ? 's' : ''}` : 'Reverb is not timed to the beat'}>
+          {synced ? formatBeats(fx.beats) : '—'}
+        </span>
+        <button
+          className="fx-step"
+          aria-label={`Deck ${deck}: longer`}
+          disabled={!synced || index >= FX_BEATS.length - 1}
+          onClick={() => step(1)}>
+          ›
+        </button>
+      </div>
     );
   };
 
+  // Dry/wet, adjustable while off too: with no effect the track passes unchanged.
   const amountKnob = (deck: DeckId) => {
     const { fx } = channels[deck];
     return (
-      <Knob
-        value={fx.amount}
-        min={0}
-        max={1}
-        centre={0}
-        label=""
-        title={`Dry/wet ${Math.round(fx.amount * 100)}% wet (0 = dry only, 100 = effect only)`}
-        color={DECK_COLOR[deck]}
-        disabled={!fx.type}
-        onChange={(value) => onFxChange(deck, { ...fx, amount: value })}
-      />
+      <div className={`fx-amount ${fx.type ? 'live' : ''} fx-${deck.toLowerCase()}`}>
+        <Knob
+          value={fx.amount}
+          min={0}
+          max={1}
+          centre={0}
+          resetTo={FX_AMOUNT_RESET}
+          label={`Deck ${deck} dry/wet`}
+          title={`Dry/wet ${Math.round(fx.amount * 100)}% wet (0 = dry only, 100 = effect only; double-click for 50%)`}
+          color={DECK_COLOR[deck]}
+          onChange={(value) => onFxChange(deck, { ...fx, amount: value })}
+        />
+        <span className="fx-amount-value">{amountReadout(fx.amount)}</span>
+      </div>
     );
   };
 
@@ -224,18 +255,18 @@ export function Mixer({
 
       <div className="mixer-fx">
         <div className="mixer-row">
-          {fxSelect('A')}
+          {fxPads('A')}
           <span className="mixer-row-label">FX</span>
-          {fxSelect('B')}
+          {fxPads('B')}
         </div>
         <div className="mixer-row">
-          {beatsSelect('A')}
+          {beatStepper('A')}
           <span className="mixer-row-label">BEAT</span>
-          {beatsSelect('B')}
+          {beatStepper('B')}
         </div>
         <div className="mixer-row">
           {amountKnob('A')}
-          <span className="mixer-row-label">AMT</span>
+          <span className="mixer-row-label">D/W</span>
           {amountKnob('B')}
         </div>
       </div>

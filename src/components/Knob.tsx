@@ -6,6 +6,8 @@ interface KnobProps {
   max?: number;
   /** Where a double-click returns to; the value arc is drawn from here. */
   centre?: number;
+  /** Double-click target when it isn't the arc's origin (a dry/wet knob fills from 0, resets to ½). */
+  resetTo?: number;
   label: string;
   /** Tooltip, normally including the formatted value. */
   title?: string;
@@ -47,6 +49,7 @@ export function Knob({
   min = -1,
   max = 1,
   centre = 0,
+  resetTo = centre,
   label,
   title,
   size = 40,
@@ -98,7 +101,7 @@ export function Knob({
     let next: number | null = null;
     if (e.key === 'ArrowUp' || e.key === 'ArrowRight') next = clamp(value + step, min, max);
     if (e.key === 'ArrowDown' || e.key === 'ArrowLeft') next = clamp(value - step, min, max);
-    if (e.key === 'Home' || e.key === 'Backspace') next = centre;
+    if (e.key === 'Home' || e.key === 'Backspace') next = resetTo;
     if (next === null) return;
     e.preventDefault();
     if (next !== value) onChange(next);
@@ -127,7 +130,7 @@ export function Knob({
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerUp}
-      onDoubleClick={() => !disabled && onChange(centre)}
+      onDoubleClick={() => !disabled && onChange(resetTo)}
       onKeyDown={onKeyDown}>
       <svg className="knob-svg" width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
         <path className="knob-track" d={arc(cx, cy, r, -SWEEP / 2, SWEEP / 2)} />

@@ -1555,31 +1555,162 @@ select {
 .mixer-fx {
   display: flex;
   flex-direction: column;
-  gap: 3px;
-  padding-top: 4px;
+  gap: 2px;
+  padding-top: 3px;
   border-top: 1px solid var(--line);
 }
 
-.mixer-select {
+/* Each side lights in its deck's colour. */
+.fx-a {
+  --fx-color: var(--deck-a);
+}
+
+.fx-b {
+  --fx-color: var(--deck-b);
+}
+
+/* Effect pads: rubber-pad buttons, unlit until an effect runs. */
+.fx-pads {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2px;
   width: 66px;
-  height: 20px;
-  padding: 0 3px;
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: 0.4px;
-  color: var(--text-2);
+}
+
+.fx-pad {
+  height: 13px;
+  padding: 0;
+  border-radius: 2px;
+  border: 1px solid #343434;
+  background: linear-gradient(#232323, #1a1a1a);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  color: var(--text-3);
+  font-size: 7px;
+  font-weight: 800;
+  letter-spacing: 0.3px;
+  cursor: pointer;
+  transition:
+    background 80ms,
+    color 80ms,
+    box-shadow 80ms;
+}
+
+.fx-pad:hover {
+  color: var(--text);
+  border-color: var(--text-4);
+}
+
+.fx-pad:focus-visible,
+.fx-step:focus-visible {
+  outline: 1px solid var(--fx-color);
+  outline-offset: 1px;
+}
+
+.fx-pad.on {
+  color: #0b0b0b;
+  border-color: var(--fx-color);
+  background: var(--fx-color);
+  box-shadow:
+    0 0 6px color-mix(in srgb, var(--fx-color) 55%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.35);
+}
+
+/* Beat stepper: ‹ 1/2 › */
+.fx-beats {
+  display: grid;
+  grid-template-columns: 15px 1fr 15px;
+  align-items: center;
+  width: 66px;
+  height: 16px;
   background: #0f0f0f;
   border: 1px solid var(--line-2);
   border-radius: 3px;
+  overflow: hidden;
 }
 
-.mixer-select.on {
-  color: var(--accent);
-  border-color: var(--accent);
+.fx-step {
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: #1c1c1c;
+  color: var(--text-2);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
 }
 
-.mixer-select:disabled {
+.fx-step:hover:not(:disabled) {
+  color: var(--text);
+  background: #262626;
+}
+
+.fx-step:disabled {
   color: var(--text-4);
+  cursor: default;
+}
+
+.fx-beats-value {
+  font-family: var(--mono);
+  font-size: 9px;
+  font-weight: 600;
+  text-align: center;
+  color: var(--text-3);
+}
+
+.fx-beats.live .fx-beats-value {
+  color: var(--fx-color);
+}
+
+.fx-beats.none .fx-beats-value {
+  color: var(--text-4);
+}
+
+/* Dry/wet: the knob dims while no effect runs (it can still be preset), glows while one does. */
+/* The readout sits on the outer side, so the knob stays in line with the EQ knobs above it. */
+.fx-amount {
+  position: relative;
+}
+
+.fx-amount .knob-label {
+  display: none;
+}
+
+.fx-amount .knob {
+  opacity: 0.55;
+  transition: opacity 120ms;
+}
+
+.fx-amount .knob:hover,
+.fx-amount .knob:focus-visible,
+.fx-amount.live .knob {
+  opacity: 1;
+}
+
+.fx-amount.live .knob-svg {
+  filter: drop-shadow(0 0 3px color-mix(in srgb, var(--fx-color) 50%, transparent));
+}
+
+.fx-amount-value {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  font-family: var(--mono);
+  font-size: 8px;
+  color: var(--text-3);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.fx-amount.fx-a .fx-amount-value {
+  right: calc(100% + 3px);
+}
+
+.fx-amount.fx-b .fx-amount-value {
+  left: calc(100% + 3px);
+}
+
+.fx-amount.live .fx-amount-value {
+  color: var(--fx-color);
 }
 
 /* Crossfader curve */
