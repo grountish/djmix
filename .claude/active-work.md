@@ -10,11 +10,12 @@ https://miltonmannarino.github.io/djmix-features/ — what changed, how to test,
 Shared dev server: Vite on :5173 (+ Electron). The live tests (`npm run test:live`) start their
 own Vite on :5174 with HMR off, so edits don't reload the page under a running test.
 
-## Session 62fae4bc — mixer FX section redesign — IN PROGRESS (2026-10-30)
+## Session 62fae4bc — mixer FX section redesign — DONE `2e71b37` (2026-10-30)
 
-Effect pads instead of the FX dropdown, a beat stepper instead of the BEAT dropdown, a clearer
-dry/wet knob, a proper idle look. Files: `src/components/Mixer.tsx`, `src/components/Knob.tsx`,
-the "Mixer: effects" block of `src/styles/index.css`. Engine (`fx.ts`) untouched.
+Effect pads instead of the FX dropdown, a ‹ 1/2 › beat stepper, a D/W knob with a DRY / n% / WET
+readout that glows while its effect runs (`Knob` `resetTo`), beat and dry/wet presettable while
+off. Engine (`fx.ts`) untouched. Every file is free. Note for test runs: this shell had
+`NODE_ENV=production`, which hides `window.__djmix`; run `env -u NODE_ENV npm run test:live`.
 
 ## Session 6e8d1284 — zoomed waveform flicker — DONE `244de2c` (2026-10-20)
 
