@@ -10,6 +10,12 @@ https://miltonmannarino.github.io/djmix-features/ — what changed, how to test,
 Shared dev server: Vite on :5173 (+ Electron). The live tests (`npm run test:live`) start their
 own Vite on :5174 with HMR off, so edits don't reload the page under a running test.
 
+## Session 62fae4bc — mixer FX section redesign — IN PROGRESS (2026-10-30)
+
+Effect pads instead of the FX dropdown, a beat stepper instead of the BEAT dropdown, a clearer
+dry/wet knob, a proper idle look. Files: `src/components/Mixer.tsx`, `src/components/Knob.tsx`,
+the "Mixer: effects" block of `src/styles/index.css`. Engine (`fx.ts`) untouched.
+
 ## Session 6e8d1284 — zoomed waveform flicker — DONE `244de2c` (2026-10-20)
 
 Zoomed waveform columns on a fixed time grid (`waveColumns.ts`), view origin in whole pixels
